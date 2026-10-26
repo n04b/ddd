@@ -67,6 +67,7 @@ Keys work in any keyboard layout, because the app reads key codes rather than ch
 - Drag a row onto a group to put the object inside it, or onto the empty space below the list to move it to the top level.
 - Double-click a name to rename it.
 - The eye hides or shows an object. ⌥-click the eye to show only that object; ⌥-click it again to show everything.
+- The cube to the left of the eye always draws an object and its children as an outline, whatever the outline mode. The flag is saved with the project.
 - The context menu has rename, solid, hole or mask, grouping, duplicate, delete and, for boxes, fillet presets.
 
 ### Inspector

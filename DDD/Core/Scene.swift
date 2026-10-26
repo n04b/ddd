@@ -35,6 +35,9 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var kind: NodeKind
     var mode: NodeMode = .solid
     var visible: Bool = true
+    /// Всегда рисовать объект и его потомков контуром, в любом режиме.
+    /// nil — выключено; в старых файлах поля нет.
+    var outlined: Bool?
     /// Центр объекта в пространстве родителя, мм.
     var position: Vec3 = .zero
     /// Углы Эйлера, градусы (X, затем Y, затем Z).
@@ -73,6 +76,7 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
         var key = self
         key.id = Node.nilID
         key.name = ""
+        key.outlined = nil
         key.children = children.map { $0.identityStripped }
         return key
     }

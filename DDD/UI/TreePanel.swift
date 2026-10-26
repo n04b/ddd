@@ -1,6 +1,6 @@
 //
 //  TreePanel.swift
-//  Дерево объектов: выделение, переименование, видимость, перетаскивание в группы.
+//  Дерево объектов: выделение, переименование, видимость, контур, перетаскивание в группы.
 //
 
 import SwiftUI
@@ -9,6 +9,8 @@ import AppKit
 private struct TreeItem: Identifiable {
     let node: Node
     let depth: Int
+    /// Контуром рисуется предок — значит, и этот объект.
+    let inheritedOutline: Bool
     var id: UUID { node.id }
 }
 
@@ -33,7 +35,8 @@ struct TreePanel: View {
                             .padding(.vertical, 10)
                     }
                     ForEach(items) { item in
-                        TreeRow(model: model, node: item.node, depth: item.depth)
+                        TreeRow(model: model, node: item.node, depth: item.depth,
+                                inheritedOutline: item.inheritedOutline)
                     }
                     rootDropZone
                 }
@@ -68,15 +71,15 @@ struct TreePanel: View {
 
     private var items: [TreeItem] {
         var result: [TreeItem] = []
-        func walk(_ nodes: [Node], depth: Int) {
+        func walk(_ nodes: [Node], depth: Int, outlined: Bool) {
             for node in nodes {
-                result.append(TreeItem(node: node, depth: depth))
+                result.append(TreeItem(node: node, depth: depth, inheritedOutline: outlined))
                 if node.kind == .group, model.expanded.contains(node.id) {
-                    walk(node.children, depth: depth + 1)
+                    walk(node.children, depth: depth + 1, outlined: outlined || node.outlined == true)
                 }
             }
         }
-        walk(model.doc.nodes, depth: 0)
+        walk(model.doc.nodes, depth: 0, outlined: false)
         return result
     }
 }
@@ -85,15 +88,17 @@ private struct TreeRow: View {
     let model: EditorModel
     let node: Node
     let depth: Int
+    let inheritedOutline: Bool
     @State private var hovering = false
     @State private var eyeHovering = false
     @State private var optionDown = false
     @State private var dropTargeted = false
 
-    init(model: EditorModel, node: Node, depth: Int) {
+    init(model: EditorModel, node: Node, depth: Int, inheritedOutline: Bool) {
         self.model = model
         self.node = node
         self.depth = depth
+        self.inheritedOutline = inheritedOutline
     }
 
     var body: some View {
@@ -163,6 +168,23 @@ private struct TreeRow: View {
 
             Spacer(minLength: 4)
 
+            let outlined = node.outlined == true
+            if hovering || outlined || inheritedOutline {
+                Button {
+                    model.toggleOutlined(node.id)
+                } label: {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(outlined ? Theme.cyan
+                                         : (inheritedOutline ? Theme.cyan.opacity(0.4) : Theme.tertiary))
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(outlined ? "Stop drawing as an outline"
+                      : (inheritedOutline ? "Drawn as an outline with its group" : "Always draw as an outline, with its children"))
+            }
+
             if hovering || !node.visible {
                 // ⌥ над глазом — «соло», как у дорожки в DAW: глаз заливается.
                 let solo = eyeHovering && optionDown
@@ -183,6 +205,9 @@ private struct TreeRow: View {
                 .onHover { eyeHovering = $0 }
                 .onModifierKeysChanged(mask: .option) { _, keys in optionDown = keys.contains(.option) }
                 .help((node.visible ? "Hide" : "Show") + " · ⌥-click — show only this, again — show all")
+            } else if node.outlined == true || inheritedOutline {
+                // Место глаза, чтобы иконка контура не прыгала при наведении.
+                Color.clear.frame(width: 18, height: 18)
             }
         }
         .padding(.leading, CGFloat(depth) * 14 + 4)

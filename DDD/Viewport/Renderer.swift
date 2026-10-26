@@ -1,7 +1,7 @@
 //
 //  Renderer.swift
 //  Рисует сцену поверх прозрачного фона окна: тела, сетку стола,
-//  отверстия и маски (контуром или заливкой), подсветку выделения.
+//  отверстия и маски (контуром или заливкой), объекты с флагом «контур», подсветку выделения.
 //
 
 import Foundation
@@ -35,6 +35,7 @@ enum Palette {
     static let mask = SIMD4<Float>(0.72, 0.58, 1.00, 0.22)
     static let maskXray = SIMD4<Float>(0.72, 0.58, 1.00, 0.06)
     static let maskOutline = SIMD4<Float>(0.72, 0.58, 1.00, 0.85)
+    static let solidOutline = SIMD4<Float>(0.86, 0.89, 0.95, 0.70)
     static let solidGhost = SIMD4<Float>(0.68, 0.72, 0.79, 0.30)
     static let solidGhostXray = SIMD4<Float>(0.68, 0.72, 0.79, 0.07)
     static let selection = SIMD4<Float>(0.30, 0.84, 0.98, 0.30)
@@ -201,15 +202,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         let filled = outlineMode ? selected.union(siblings) : Set(scene.holes + scene.masks)
 
-        // 0. Остальные отверстия и маски рисуются только контуром: сначала их силуэты
-        // складываются в маску (отверстия — красный канал, маски — зелёный),
+        // 0. Остальные отверстия и маски рисуются только контуром; объекты с флагом
+        // «контур» и их потомки — тоже, в любом режиме. Сначала силуэты складываются
+        // в маску (отверстия — красный канал, маски — зелёный, тела — синий),
         // потом по краю каждого канала идёт линия.
+        let forced = scene.outlined
         let layers: [(ids: [UUID], color: SIMD4<Float>)] = [
-            (scene.holes, Palette.holeOutline),
-            (scene.masks, Palette.maskOutline),
+            (scene.holes.filter { forced.contains($0) || !filled.contains($0) }, Palette.holeOutline),
+            (scene.masks.filter { forced.contains($0) || !filled.contains($0) }, Palette.maskOutline),
+            (scene.solids.filter { forced.contains($0) }, Palette.solidOutline),
         ]
         var outlineMask: (texture: MTLTexture, uniforms: OutlineUniforms)?
-        let outlined = layers.map { $0.ids.filter { !filled.contains($0) && meshBuffers[$0] != nil } }
+        let outlined = layers.map { $0.ids.filter { meshBuffers[$0] != nil } }
         if outlined.contains(where: { !$0.isEmpty }),
            let targets = maskTargets(for: size, sampleCount: view.sampleCount) {
             let maskPass = MTLRenderPassDescriptor()
@@ -232,7 +236,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 maskEncoder.endEncoding()
                 let scale = Float(size.width / max(view.bounds.width, 1))
                 outlineMask = (targets.resolved,
-                               OutlineUniforms(colors: (layers[0].color, layers[1].color, .zero, .zero),
+                               OutlineUniforms(colors: (layers[0].color, layers[1].color, layers[2].color, .zero),
                                                params: SIMD4<Float>(Renderer.outlineWidth * scale * 0.5, 0, 0, 0)))
             }
         }
@@ -246,10 +250,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             encode(encoder, mesh, color, lit: lit, depth: depth, primitive: primitive, model: model)
         }
 
-        // 1. Тела верхнего уровня — это печатаемые детали.
+        // 1. Тела верхнего уровня — это печатаемые детали. Деталь с флагом «контур»
+        // заливкой не рисуется; выделенная, она подсвечивается как объект в группе.
         var parts = Set<UUID>()
         let xray = model.filletXrayPart
-        for node in document.nodes where node.visible && node.mode == .solid {
+        for node in document.nodes where node.visible && node.mode == .solid && !forced.contains(node.id) {
             parts.insert(node.id)
             if node.id == xray { continue }
             guard let mesh = meshBuffers[node.id], let matrix = scene.matrices[node.id] else { continue }
@@ -262,7 +267,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             submit(line.mesh, line.color, lit: false, depth: depthTest, primitive: .line)
         }
 
-        // 3. Отверстия и маски — одной линией по внешнему контуру, внутри пусто.
+        // 3. Контуры — одной линией по внешнему контуру, внутри пусто.
         if var outlineMask {
             encoder.setRenderPipelineState(outlinePipeline)
             encoder.setDepthStencilState(depthAlways)
@@ -273,17 +278,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         // Выделенные и их соседи по группе — заливкой: видимая часть плотнее,
         // скрытая внутри тела — едва заметно.
-        for id in scene.holes where filled.contains(id) {
+        for id in scene.holes where filled.contains(id) && !forced.contains(id) {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.holeXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.hole, lit: true, depth: depthTest, model: matrix)
         }
-        for id in scene.masks where filled.contains(id) {
+        for id in scene.masks where filled.contains(id) && !forced.contains(id) {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.maskXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.mask, lit: true, depth: depthTest, model: matrix)
         }
-        for id in siblings where !parts.contains(id) && document.node(id)?.mode == .solid {
+        for id in siblings where !parts.contains(id) && !forced.contains(id) && document.node(id)?.mode == .solid {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.solidGhostXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.solidGhost, lit: true, depth: depthTest, model: matrix)
@@ -341,22 +346,31 @@ final class Renderer: NSObject, MTKViewDelegate {
         meshBuffers = buffers
     }
 
-    /// Мировые матрицы видимых узлов, видимые отверстия и маски.
-    private static func collect(_ document: SceneDocument) -> (matrices: [UUID: simd_float4x4], holes: [UUID], masks: [UUID]) {
+    /// Мировые матрицы видимых узлов; видимые тела, отверстия и маски на всех уровнях;
+    /// узлы, которые рисуются контуром из-за своего флага или флага предка.
+    private static func collect(_ document: SceneDocument)
+        -> (matrices: [UUID: simd_float4x4], solids: [UUID], holes: [UUID], masks: [UUID], outlined: Set<UUID>) {
         var matrices: [UUID: simd_float4x4] = [:]
+        var solids: [UUID] = []
         var holes: [UUID] = []
         var masks: [UUID] = []
-        func walk(_ nodes: [Node], parent: Pose) {
+        var outlined = Set<UUID>()
+        func walk(_ nodes: [Node], parent: Pose, outline: Bool) {
             for node in nodes where node.visible {
                 let pose = parent * node.pose
+                let outline = outline || node.outlined == true
                 matrices[node.id] = matrix(pose)
-                if node.mode == .hole { holes.append(node.id) }
-                if node.mode == .mask { masks.append(node.id) }
-                walk(node.children, parent: pose)
+                switch node.mode {
+                case .solid: solids.append(node.id)
+                case .hole: holes.append(node.id)
+                case .mask: masks.append(node.id)
+                }
+                if outline { outlined.insert(node.id) }
+                walk(node.children, parent: pose, outline: outline)
             }
         }
-        walk(document.nodes, parent: .identity)
-        return (matrices, holes, masks)
+        walk(document.nodes, parent: .identity, outline: false)
+        return (matrices, solids, holes, masks, outlined)
     }
 
     private static func matrix(_ pose: Pose) -> simd_float4x4 {

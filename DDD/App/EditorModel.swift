@@ -413,6 +413,12 @@ final class EditorModel {
         }
     }
 
+    func toggleOutlined(_ id: UUID) {
+        mutate { document in
+            document.update(id) { node in node.outlined = node.outlined == true ? nil : true }
+        }
+    }
+
     /// ⌥-клик по глазу: виден только этот объект — с предками, чтобы он не пропал
     /// вместе со скрытой группой, и с потомками. Повторный ⌥-клик показывает всё.
     func soloVisibility(_ id: UUID) {
