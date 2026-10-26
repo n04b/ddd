@@ -23,7 +23,6 @@ struct TreePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     if model.doc.nodes.isEmpty {
@@ -49,30 +48,6 @@ struct TreePanel: View {
             .frame(maxHeight: contentHeight)
         }
         .frame(width: 264)
-    }
-
-    private var header: some View {
-        HStack(spacing: 6) {
-            Text("\(model.doc.allNodes().count)")
-                .font(Theme.mono(10))
-                .foregroundStyle(Theme.cyan.opacity(0.8))
-            Spacer()
-            Menu {
-                Button("Параллелепипед") { model.add(.box) }
-                Button("Сфера") { model.add(.sphere) }
-                Button("Цилиндр") { model.add(.cylinder) }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.secondary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Добавить примитив")
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 36)
     }
 
     /// Бросить сюда — вынести объект на верхний уровень.
