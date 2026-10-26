@@ -44,6 +44,9 @@ final class EditorModel {
     var selection: [UUID] = []
     var expanded: Set<UUID> = []
     var renamingID: UUID?
+    /// Режим контуров: невыделенные отверстия и маски — одной линией,
+    /// соседи выделенного по группе — заливкой. Переключается пробелом.
+    var outlineMode = false
     var toast: Toast?
     private(set) var output = KernelOutput()
     private(set) var isComputing = false
@@ -839,6 +842,11 @@ final class EditorModel {
     }
 
     // MARK: Уведомления
+
+    func toggleOutlineMode() {
+        outlineMode.toggle()
+        showToast(outlineMode ? "Outline mode: on" : "Outline mode: off")
+    }
 
     func showToast(_ text: String, undo: Bool = false) {
         let item = Toast(text: text, canUndo: undo)

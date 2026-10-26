@@ -39,6 +39,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 | G | Group the selection |
 | F | Frame the selection |
 | 1 / 2 / 3 / 4 | View: isometric, top, front, right |
+| Space | Outline mode: holes and masks are drawn as a single outline; the objects next to the selection in its group are drawn filled |
 | ← → ↑ ↓ | Move 1 mm along X and Y (⇧ — 10 mm, ⌥ — 0.1 mm) |
 | ⌘↑ / ⌘↓, PgUp / PgDn | Move along Z |
 | ⌫ | Delete |

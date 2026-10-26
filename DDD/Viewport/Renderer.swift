@@ -1,7 +1,7 @@
 //
 //  Renderer.swift
 //  Рисует сцену поверх прозрачного фона окна: тела, сетку стола,
-//  «призраки» отверстий и подсветку выделения.
+//  отверстия и маски (контуром или заливкой), подсветку выделения.
 //
 
 import Foundation
@@ -16,6 +16,11 @@ struct GPUUniforms {
     var params: SIMD4<Float>
 }
 
+struct OutlineUniforms {
+    var colors: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
+    var params: SIMD4<Float>
+}
+
 struct GPUMesh {
     let buffer: MTLBuffer
     let count: Int
@@ -26,8 +31,12 @@ enum Palette {
     static let solidSelected = SIMD4<Float>(0.52, 0.80, 0.93, 1)
     static let hole = SIMD4<Float>(1.00, 0.62, 0.25, 0.30)
     static let holeXray = SIMD4<Float>(1.00, 0.62, 0.25, 0.07)
+    static let holeOutline = SIMD4<Float>(1.00, 0.62, 0.25, 0.85)
     static let mask = SIMD4<Float>(0.72, 0.58, 1.00, 0.22)
     static let maskXray = SIMD4<Float>(0.72, 0.58, 1.00, 0.06)
+    static let maskOutline = SIMD4<Float>(0.72, 0.58, 1.00, 0.85)
+    static let solidGhost = SIMD4<Float>(0.68, 0.72, 0.79, 0.30)
+    static let solidGhostXray = SIMD4<Float>(0.68, 0.72, 0.79, 0.07)
     static let selection = SIMD4<Float>(0.30, 0.84, 0.98, 0.30)
     static let selectionXray = SIMD4<Float>(0.30, 0.84, 0.98, 0.10)
     static let filletXray = SIMD4<Float>(0.68, 0.72, 0.79, 0.30)
@@ -44,12 +53,18 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    private let maskPipeline: MTLRenderPipelineState
+    private let outlinePipeline: MTLRenderPipelineState
     private let depthWrite: MTLDepthStencilState
     private let depthTest: MTLDepthStencilState
     private let depthAlways: MTLDepthStencilState
     private let grid: [(mesh: GPUMesh, color: SIMD4<Float>)]
     private var meshBuffers: [UUID: GPUMesh] = [:]
     private var uploadedGeneration = -1
+    private var maskTextures: (msaa: MTLTexture, resolved: MTLTexture)?
+
+    /// Толщина контуров отверстий и масок, pt.
+    static let outlineWidth: Float = 1.5
 
     /// Размер стола, мм (Bambu Lab / Prusa MK4 — около 250).
     static let plateSize: Float = 256
@@ -83,9 +98,31 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
+        let maskDescriptor = MTLRenderPipelineDescriptor()
+        maskDescriptor.vertexFunction = library.makeFunction(name: "vmain")
+        maskDescriptor.fragmentFunction = library.makeFunction(name: "fmask")
+        maskDescriptor.rasterSampleCount = view.sampleCount
+        maskDescriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
+        // Силуэты в разных каналах перекрываются: каналы не должны затирать друг друга.
+        maskDescriptor.colorAttachments[0].isBlendingEnabled = true
+        maskDescriptor.colorAttachments[0].rgbBlendOperation = .max
+        maskDescriptor.colorAttachments[0].alphaBlendOperation = .max
+        maskDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+        maskDescriptor.colorAttachments[0].destinationRGBBlendFactor = .one
+        maskDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        maskDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .one
+
+        let outlineDescriptor = descriptor.copy() as! MTLRenderPipelineDescriptor
+        outlineDescriptor.vertexFunction = library.makeFunction(name: "voutline")
+        outlineDescriptor.fragmentFunction = library.makeFunction(name: "foutline")
+
         let pipeline: MTLRenderPipelineState
+        let maskPipeline: MTLRenderPipelineState
+        let outlinePipeline: MTLRenderPipelineState
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            maskPipeline = try device.makeRenderPipelineState(descriptor: maskDescriptor)
+            outlinePipeline = try device.makeRenderPipelineState(descriptor: outlineDescriptor)
         } catch {
             print("Renderer: failed to build pipeline: \(error)")
             return nil
@@ -100,6 +137,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.device = device
         self.queue = queue
         self.pipeline = pipeline
+        self.maskPipeline = maskPipeline
+        self.outlinePipeline = outlinePipeline
         self.depthWrite = depthWrite
         self.depthTest = depthTest
         self.depthAlways = depthAlways
@@ -120,8 +159,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         guard let pass = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
-              let commandBuffer = queue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+              let commandBuffer = queue.makeCommandBuffer() else { return }
 
         let size = view.drawableSize
         let aspect = Float(size.width / max(size.height, 1))
@@ -129,18 +167,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         let viewProj = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix()
         let eye = camera.eye
 
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setCullMode(.none)
-
-        func submit(_ mesh: GPUMesh, _ color: SIMD4<Float>, lit: Bool,
-                    depth: MTLDepthStencilState, primitive: MTLPrimitiveType = .triangle,
+        func encode(_ encoder: MTLRenderCommandEncoder, _ mesh: GPUMesh, _ color: SIMD4<Float>, lit: Bool,
+                    depth: MTLDepthStencilState?, primitive: MTLPrimitiveType = .triangle,
                     model: simd_float4x4 = matrix_identity_float4x4) {
             var uniforms = GPUUniforms(viewProj: viewProj,
                                        model: model,
                                        color: color,
                                        cameraPos: SIMD4<Float>(eye.x, eye.y, eye.z, 1),
                                        params: SIMD4<Float>(lit ? 1 : 0, 0, 0, 0))
-            encoder.setDepthStencilState(depth)
+            if let depth { encoder.setDepthStencilState(depth) }
             encoder.setVertexBuffer(mesh.buffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<GPUUniforms>.stride, index: 1)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<GPUUniforms>.stride, index: 1)
@@ -152,6 +187,64 @@ final class Renderer: NSObject, MTKViewDelegate {
         let document = model.doc
         let selected = Set(model.selection)
         let scene = Renderer.collect(document)
+
+        // В режиме контуров соседи выделенного объекта по группе рисуются заливкой,
+        // как и он сам, а остальные отверстия и маски — контуром. Вне режима
+        // заливкой рисуются все отверстия и маски.
+        let outlineMode = model.outlineMode
+        var siblings: [UUID] = []
+        for id in model.selection where outlineMode {
+            guard let parent = document.parentID(of: id), let group = document.node(parent) else { continue }
+            for child in group.children where !selected.contains(child.id) && !siblings.contains(child.id) {
+                siblings.append(child.id)
+            }
+        }
+        let filled = outlineMode ? selected.union(siblings) : Set(scene.holes + scene.masks)
+
+        // 0. Остальные отверстия и маски рисуются только контуром: сначала их силуэты
+        // складываются в маску (отверстия — красный канал, маски — зелёный),
+        // потом по краю каждого канала идёт линия.
+        let layers: [(ids: [UUID], color: SIMD4<Float>)] = [
+            (scene.holes, Palette.holeOutline),
+            (scene.masks, Palette.maskOutline),
+        ]
+        var outlineMask: (texture: MTLTexture, uniforms: OutlineUniforms)?
+        let outlined = layers.map { $0.ids.filter { !filled.contains($0) && meshBuffers[$0] != nil } }
+        if outlined.contains(where: { !$0.isEmpty }),
+           let targets = maskTargets(for: size, sampleCount: view.sampleCount) {
+            let maskPass = MTLRenderPassDescriptor()
+            maskPass.colorAttachments[0].texture = targets.msaa
+            maskPass.colorAttachments[0].resolveTexture = targets.resolved
+            maskPass.colorAttachments[0].loadAction = .clear
+            maskPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            maskPass.colorAttachments[0].storeAction = .multisampleResolve
+            if let maskEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: maskPass) {
+                maskEncoder.setRenderPipelineState(maskPipeline)
+                maskEncoder.setCullMode(.none)
+                for (channel, ids) in outlined.enumerated() {
+                    var unit = SIMD4<Float>.zero
+                    unit[channel] = 1
+                    for id in ids {
+                        guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
+                        encode(maskEncoder, mesh, unit, lit: false, depth: nil, model: matrix)
+                    }
+                }
+                maskEncoder.endEncoding()
+                let scale = Float(size.width / max(view.bounds.width, 1))
+                outlineMask = (targets.resolved,
+                               OutlineUniforms(colors: (layers[0].color, layers[1].color, .zero, .zero),
+                                               params: SIMD4<Float>(Renderer.outlineWidth * scale * 0.5, 0, 0, 0)))
+            }
+        }
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setCullMode(.none)
+        func submit(_ mesh: GPUMesh, _ color: SIMD4<Float>, lit: Bool,
+                    depth: MTLDepthStencilState, primitive: MTLPrimitiveType = .triangle,
+                    model: simd_float4x4 = matrix_identity_float4x4) {
+            encode(encoder, mesh, color, lit: lit, depth: depth, primitive: primitive, model: model)
+        }
 
         // 1. Тела верхнего уровня — это печатаемые детали.
         var parts = Set<UUID>()
@@ -169,16 +262,31 @@ final class Renderer: NSObject, MTKViewDelegate {
             submit(line.mesh, line.color, lit: false, depth: depthTest, primitive: .line)
         }
 
-        // 3. Отверстия: видимая часть плотнее, скрытая внутри тела — едва заметно.
-        for id in scene.holes {
+        // 3. Отверстия и маски — одной линией по внешнему контуру, внутри пусто.
+        if var outlineMask {
+            encoder.setRenderPipelineState(outlinePipeline)
+            encoder.setDepthStencilState(depthAlways)
+            encoder.setFragmentTexture(outlineMask.texture, index: 0)
+            encoder.setFragmentBytes(&outlineMask.uniforms, length: MemoryLayout<OutlineUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            encoder.setRenderPipelineState(pipeline)
+        }
+        // Выделенные и их соседи по группе — заливкой: видимая часть плотнее,
+        // скрытая внутри тела — едва заметно.
+        for id in scene.holes where filled.contains(id) {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.holeXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.hole, lit: true, depth: depthTest, model: matrix)
         }
-        for id in scene.masks {
+        for id in scene.masks where filled.contains(id) {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.maskXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.mask, lit: true, depth: depthTest, model: matrix)
+        }
+        for id in siblings where !parts.contains(id) && document.node(id)?.mode == .solid {
+            guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
+            submit(mesh, Palette.solidGhostXray, lit: false, depth: depthAlways, model: matrix)
+            submit(mesh, Palette.solidGhost, lit: true, depth: depthTest, model: matrix)
         }
 
         // 3½. Деталь в режиме скруглений — рентгеном: задние и нижние рёбра видны сквозь тело.
@@ -199,6 +307,26 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     // MARK: Данные
+
+    /// Текстуры маски контуров; пересоздаются при смене размера окна.
+    private func maskTargets(for size: CGSize, sampleCount: Int) -> (msaa: MTLTexture, resolved: MTLTexture)? {
+        let width = Int(size.width), height = Int(size.height)
+        guard width > 0, height > 0 else { return nil }
+        if let targets = maskTextures, targets.resolved.width == width, targets.resolved.height == height {
+            return targets
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width,
+                                                                  height: height, mipmapped: false)
+        descriptor.storageMode = .private
+        descriptor.usage = [.renderTarget, .shaderRead]
+        guard let resolved = device.makeTexture(descriptor: descriptor) else { return nil }
+        descriptor.textureType = .type2DMultisample
+        descriptor.sampleCount = sampleCount
+        descriptor.usage = .renderTarget
+        guard let msaa = device.makeTexture(descriptor: descriptor) else { return nil }
+        maskTextures = (msaa, resolved)
+        return maskTextures
+    }
 
     private func syncMeshes(_ output: KernelOutput) {
         guard output.generation != uploadedGeneration else { return }

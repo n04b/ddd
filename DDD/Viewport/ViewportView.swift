@@ -31,6 +31,7 @@ struct ViewportView: NSViewRepresentable {
         _ = model.output.generation
         _ = model.filletTarget
         _ = model.filletSelection
+        _ = model.outlineMode
         view.needsDisplay = true
         view.overlay.needsDisplay = true
     }
@@ -299,6 +300,7 @@ final class ViewportNSView: MTKView {
         case 19: model.setView(.top)      // 2
         case 20: model.setView(.front)    // 3
         case 21: model.setView(.right)    // 4
+        case 49: model.toggleOutlineMode() // пробел
         default: super.keyDown(with: event)
         }
     }
