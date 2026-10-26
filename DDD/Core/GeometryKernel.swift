@@ -90,6 +90,8 @@ nonisolated struct KernelOutput: Sendable {
     var meshes: [UUID: TriMesh] = [:]
     var generation: Int = 0
     var milliseconds: Double = 0
+    /// Черновик: скругления грубее, группы без булевых операций.
+    var isDraft = false
 }
 
 nonisolated final class GeometryKernel {
@@ -98,11 +100,22 @@ nonisolated final class GeometryKernel {
     private var meshCache: [Node: TriMesh] = [:]
     private var nextMeshCache: [Node: TriMesh] = [:]
 
+    /// Черновое ядро считает только изменившееся: всё остальное берёт
+    /// у точного ядра, поэтому соседние группы не теряют вырезанных отверстий.
+    private let draft: Bool
+    private let precise: GeometryKernel?
+
+    init(draft: Bool = false, precise: GeometryKernel? = nil) {
+        self.draft = draft
+        self.precise = precise
+    }
+
     func evaluate(_ document: SceneDocument) -> KernelOutput {
         let start = Date()
         nextPolygonCache = [:]
         nextMeshCache = [:]
         var output = KernelOutput()
+        output.isDraft = draft
         for node in document.nodes {
             visit(node, output: &output)
         }
@@ -124,7 +137,7 @@ nonisolated final class GeometryKernel {
     private func localMesh(_ node: Node) -> TriMesh {
         let key = node.localKey
         if let hit = nextMeshCache[key] { return hit }
-        let mesh = meshCache[key] ?? TriMesh(polygons: localPolygons(node))
+        let mesh = meshCache[key] ?? precise?.meshCache[key] ?? TriMesh(polygons: localPolygons(node))
         nextMeshCache[key] = mesh
         return mesh
     }
@@ -133,13 +146,18 @@ nonisolated final class GeometryKernel {
     private func localPolygons(_ node: Node) -> [CSGPolygon] {
         let key = node.localKey
         if let hit = nextPolygonCache[key] { return hit }
-        if let hit = polygonCache[key] {
+        if let hit = polygonCache[key] ?? precise?.polygonCache[key] {
             nextPolygonCache[key] = hit
             return hit
         }
 
         let result: [CSGPolygon]
-        if node.kind == .group {
+        if node.kind == .group && draft {
+            // Тела просто складываются, отверстия видны поверх рентгеном.
+            result = node.children
+                .filter { $0.visible && $0.mode == .solid }
+                .flatMap { CSG.transformed(localPolygons($0), by: $0.pose) }
+        } else if node.kind == .group {
             var solid: [CSGPolygon] = []
             var solidBox = AABB.empty
             var holes: [(polygons: [CSGPolygon], box: AABB)] = []
@@ -164,7 +182,7 @@ nonisolated final class GeometryKernel {
             }
             result = solid
         } else {
-            result = Tessellator.polygons(for: node)
+            result = Tessellator.polygons(for: node, draft: draft)
         }
 
         nextPolygonCache[key] = result
@@ -176,12 +194,15 @@ nonisolated final class GeometryKernel {
 /// промежуточные версии пропускаются: считается только последняя.
 nonisolated final class KernelWorker: @unchecked Sendable {
     private let condition = NSCondition()
-    private var pending: (document: SceneDocument, generation: Int)?
-    private let kernel = GeometryKernel()
+    private var pending: (document: SceneDocument, generation: Int, draft: Bool)?
+    private let kernel: GeometryKernel
+    private let draftKernel: GeometryKernel
     private let deliver: @Sendable (KernelOutput) -> Void
 
     init(deliver: @escaping @Sendable (KernelOutput) -> Void) {
         self.deliver = deliver
+        kernel = GeometryKernel()
+        draftKernel = GeometryKernel(draft: true, precise: kernel)
         let thread = Thread { [unowned self] in
             self.loop()
         }
@@ -191,9 +212,9 @@ nonisolated final class KernelWorker: @unchecked Sendable {
         thread.start()
     }
 
-    func submit(_ document: SceneDocument, generation: Int) {
+    func submit(_ document: SceneDocument, generation: Int, draft: Bool) {
         condition.lock()
-        pending = (document, generation)
+        pending = (document, generation, draft)
         condition.signal()
         condition.unlock()
     }
@@ -208,7 +229,7 @@ nonisolated final class KernelWorker: @unchecked Sendable {
             pending = nil
             condition.unlock()
 
-            var output = kernel.evaluate(job.document)
+            var output = (job.draft ? draftKernel : kernel).evaluate(job.document)
             output.generation = job.generation
             deliver(output)
         }

@@ -6,10 +6,13 @@
 import Foundation
 
 nonisolated enum Tessellator {
-    static func polygons(for node: Node) -> [CSGPolygon] {
+    static func polygons(for node: Node, draft: Bool = false) -> [CSGPolygon] {
         let s = Vec3(max(node.size.x, 0.01), max(node.size.y, 0.01), max(node.size.z, 0.01))
         switch node.kind {
         case .box:
+            if let rounding = node.rounding, !rounding.isEmpty {
+                return RoundedBox.polygons(size: s, rounding: rounding, draft: draft)
+            }
             return box(size: s)
         case .sphere:
             return sphere(diameter: s.x)

@@ -43,6 +43,9 @@ final class EditorModel {
     @ObservationIgnored private var moveStart: [UUID: Vec3] = [:]
     @ObservationIgnored private var projectURL: URL?
     @ObservationIgnored private var needsInitialFrame = true
+    @ObservationIgnored private var draftSubmitted = false
+    @ObservationIgnored private var settleTask: Task<Void, Never>?
+    @ObservationIgnored private var exportWhenReady = false
 
     init() {
         doc = Persistence.loadAutosave() ?? SceneDocument.demo()
@@ -92,12 +95,14 @@ final class EditorModel {
         }
         coalesceKey = key
         doc = next
-        documentChanged()
+        // Слитые правки идут потоком (тянут поле, двигают мышью): пока считаем черновик.
+        documentChanged(draft: key != nil)
     }
 
-    /// Следующая правка начнёт новый шаг истории.
+    /// Следующая правка начнёт новый шаг истории. Правка закончена — считаем точно.
     func breakCoalescing() {
         coalesceKey = nil
+        settle()
     }
 
     func undo() {
@@ -118,24 +123,45 @@ final class EditorModel {
         documentChanged()
     }
 
-    private func documentChanged() {
-        scheduleEvaluation()
+    private func documentChanged(draft: Bool = false) {
+        scheduleEvaluation(draft: draft)
         scheduleAutosave()
         requestRedraw()
     }
 
     // MARK: Ядро
 
-    private func scheduleEvaluation() {
+    private func scheduleEvaluation(draft: Bool = false) {
         generation += 1
         isComputing = true
-        worker?.submit(doc, generation: generation)
+        draftSubmitted = draft
+        worker?.submit(doc, generation: generation, draft: draft)
+        settleTask?.cancel()
+        settleTask = nil
+        if draft {
+            // Страховка: если конец правки не пришёл, точный расчёт после паузы.
+            settleTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
+                self?.settle()
+            }
+        }
+    }
+
+    /// Заменяет черновик точным расчётом.
+    private func settle() {
+        guard draftSubmitted else { return }
+        scheduleEvaluation()
     }
 
     private func receive(_ result: KernelOutput) {
         output = result
         if result.generation == generation {
             isComputing = false
+            if !result.isDraft && exportWhenReady {
+                exportWhenReady = false
+                exportSTL()
+            }
         }
         if needsInitialFrame {
             needsInitialFrame = false
@@ -408,6 +434,98 @@ final class EditorModel {
         }
     }
 
+    // MARK: Скругление
+
+    /// Радиус для блоков, которые ещё не скруглены.
+    var roundingRadius: Double = 2
+
+    /// Выделенные блоки: команды скругления применяются ко всем сразу.
+    var roundableIDs: [UUID] {
+        selection.filter { doc.node($0)?.kind == .box }
+    }
+
+    /// По нему меню показывает галочки.
+    private var roundingTarget: Node? {
+        roundableIDs.last.flatMap { doc.node($0) }
+    }
+
+    func roundingRadius(of node: Node) -> Double {
+        node.rounding?.radius ?? roundingRadius
+    }
+
+    func isEdgeRounded(_ e: Int) -> Bool {
+        (roundingTarget?.rounding?.edges[e] ?? 0) > 0
+    }
+
+    func isVertexRounded(_ v: Int) -> Bool {
+        (roundingTarget?.rounding?.vertices[v] ?? 0) > 0
+    }
+
+    var hasRounding: Bool {
+        roundableIDs.contains { doc.node($0)?.rounding != nil }
+    }
+
+    /// Меняет радиус всех скруглённых рёбер и вершин блока.
+    func setRoundingRadius(_ id: UUID, _ value: Double) {
+        let r = max(value, 0.1)
+        roundingRadius = r
+        mutate(coalesce: "rounding-\(id)") { document in
+            document.update(id) { node in
+                guard var rounding = node.rounding else { return }
+                rounding.edges = rounding.edges.map { $0 > 0 ? r : 0 }
+                rounding.vertices = rounding.vertices.map { $0 > 0 ? r : 0 }
+                node.rounding = rounding
+            }
+        }
+    }
+
+    func roundAll(vertices: Bool) {
+        updateRounding { rounding, r in
+            rounding.edges = Array(repeating: r, count: 12)
+            rounding.vertices = Array(repeating: vertices ? r : 0, count: 8)
+        }
+    }
+
+    /// Снятое ребро снимает и сферы на его концах: вершина держится на своих рёбрах.
+    func setEdge(_ e: Int, _ on: Bool) {
+        updateRounding { rounding, r in
+            rounding.edges[e] = on ? r : 0
+            if !on {
+                let (a, b) = BoxRounding.edgeVertices(e)
+                rounding.vertices[a] = 0
+                rounding.vertices[b] = 0
+            }
+        }
+    }
+
+    /// Скруглённая вершина скругляет и три своих ребра.
+    func setVertex(_ v: Int, _ on: Bool) {
+        updateRounding { rounding, r in
+            rounding.vertices[v] = on ? r : 0
+            if on {
+                for e in BoxRounding.vertexEdges(v) { rounding.edges[e] = r }
+            }
+        }
+    }
+
+    func clearRounding() {
+        updateRounding { rounding, _ in rounding = BoxRounding() }
+    }
+
+    private func updateRounding(_ body: (inout BoxRounding, Double) -> Void) {
+        let ids = roundableIDs
+        let fallback = roundingRadius
+        mutate { document in
+            for id in ids {
+                document.update(id) { node in
+                    var rounding = node.rounding ?? BoxRounding()
+                    body(&rounding, rounding.radius ?? fallback)
+                    node.rounding = rounding.isEmpty ? nil : rounding
+                }
+            }
+        }
+    }
+
     // MARK: Перемещение во вьюпорте
 
     func beginMove() {
@@ -564,6 +682,13 @@ final class EditorModel {
     }
 
     func exportSTL() {
+        // В файл идёт только точная геометрия: черновик или идущий расчёт дожидаемся.
+        if isComputing || output.isDraft {
+            exportWhenReady = true
+            settle()
+            showToast("Экспорт после пересчёта…")
+            return
+        }
         let meshes = doc.nodes
             .filter { $0.visible && $0.mode == .solid }
             .compactMap { node in output.meshes[node.id]?.transformed(by: node.pose) }

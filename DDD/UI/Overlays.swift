@@ -66,6 +66,8 @@ struct StatusView: View {
                 ProgressView()
                     .controlSize(.mini)
                 Text("пересчёт")
+            } else if model.output.isDraft {
+                Text("черновик")
             }
             Text("\(model.partTriangles) треуг. · \(Int(model.output.milliseconds.rounded())) мс")
         }

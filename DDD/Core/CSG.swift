@@ -65,13 +65,18 @@ nonisolated struct CSGPlane: Sendable {
     func split(_ polygon: CSGPolygon) -> SplitResult {
         let eps = CSGPlane.epsilon
         let count = polygon.vertices.count
-        var types = [Int](repeating: 0, count: count)
+        // Сначала без выделения памяти: почти все вызовы целиком по одну сторону.
         var polygonType = 0
-        for i in 0..<count {
-            let t = normal.dot(polygon.vertices[i].pos) - w
-            let type = t < -eps ? 2 : (t > eps ? 1 : 0)
-            types[i] = type
-            polygonType |= type
+        for vertex in polygon.vertices {
+            let t = normal.dot(vertex.pos) - w
+            polygonType |= t < -eps ? 2 : (t > eps ? 1 : 0)
+        }
+        var types: [Int] = []
+        if polygonType == 3 {
+            types = polygon.vertices.map { vertex in
+                let t = normal.dot(vertex.pos) - w
+                return t < -eps ? 2 : (t > eps ? 1 : 0)
+            }
         }
 
         switch polygonType {
@@ -225,7 +230,37 @@ nonisolated final class BSPNode {
 }
 
 nonisolated enum CSG {
+    /// Полигоны вне габарита второго тела операция не меняет, но BSP режет их
+    /// бесконечными плоскостями на осколки. Поэтому они идут в результат как есть,
+    /// а в BSP — только те, что задевают габарит.
+    private static func partition(_ polygons: [CSGPolygon], near box: AABB) -> (near: [CSGPolygon], far: [CSGPolygon]) {
+        var near: [CSGPolygon] = []
+        var far: [CSGPolygon] = []
+        for polygon in polygons {
+            if bounds(of: [polygon]).intersects(box, margin: 1e-3) {
+                near.append(polygon)
+            } else {
+                far.append(polygon)
+            }
+        }
+        return (near, far)
+    }
+
     static func union(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        let pa = partition(a, near: bounds(of: b))
+        let pb = partition(b, near: bounds(of: a))
+        return pa.far + pb.far + bspUnion(pa.near, pb.near)
+    }
+
+    static func subtract(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
+        if a.isEmpty || b.isEmpty { return a }
+        let pa = partition(a, near: bounds(of: b))
+        return pa.far + bspSubtract(pa.near, b)
+    }
+
+    private static func bspUnion(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
         if a.isEmpty { return b }
         if b.isEmpty { return a }
         let ta = BSPNode(a)
@@ -239,7 +274,7 @@ nonisolated enum CSG {
         return ta.allPolygons()
     }
 
-    static func subtract(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
+    private static func bspSubtract(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
         if a.isEmpty || b.isEmpty { return a }
         let ta = BSPNode(a)
         let tb = BSPNode(b)

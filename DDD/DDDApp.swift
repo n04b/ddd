@@ -56,6 +56,10 @@ struct DDDApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("Тело / отверстие") { model.toggleHole() }
                     .keyboardShortcut("h", modifiers: [.command, .option])
+                Menu("Скругление") {
+                    RoundingMenuItems(model: model)
+                }
+                .disabled(model.roundableIDs.isEmpty)
                 Divider()
                 Button("Дублировать") { model.duplicateSelection() }
                     .keyboardShortcut("d")

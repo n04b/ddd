@@ -104,6 +104,10 @@ private struct NodeInspector: View {
 
             sizeSection
 
+            if node.kind == .box {
+                roundingSection
+            }
+
             actions
         }
         .onAppear { name = node.name }
@@ -166,6 +170,41 @@ private struct NodeInspector: View {
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.tertiary)
             }
+        }
+    }
+
+    private var roundingSection: some View {
+        let id = node.id
+        let rounding = node.rounding ?? BoxRounding()
+        return section("СКРУГЛЕНИЕ") {
+            HStack(spacing: 6) {
+                NumberField(label: "R", labelColor: Theme.secondary, value: model.roundingRadius(of: node), unit: "мм",
+                            dragStep: 0.1, keyStep: 0.5, minimum: 0.1,
+                            onChange: { model.setRoundingRadius(id, $0) },
+                            onFinish: { model.breakCoalescing() })
+                Menu {
+                    RoundingMenuItems(model: model)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Скруглить")
+                            .font(Theme.label(11.5, .medium))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(Theme.cyan)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.cyan.opacity(0.14)))
+            }
+            Text(rounding.isEmpty
+                 ? "Рёбра острые"
+                 : "Рёбер: \(rounding.roundedEdgeCount) из 12 · вершин: \(rounding.roundedVertexCount) из 8")
+                .font(Theme.label(10.5))
+                .foregroundStyle(Theme.tertiary)
         }
     }
 
@@ -234,6 +273,48 @@ private struct NodeInspector: View {
         }
         .buttonStyle(HoverButtonStyle())
         .help(help)
+    }
+}
+
+/// Пункты скругления блока: общие для инспектора и меню «Объект».
+struct RoundingMenuItems: View {
+    let model: EditorModel
+
+    init(model: EditorModel) {
+        self.model = model
+    }
+
+    var body: some View {
+        Button("Все рёбра и вершины") { model.roundAll(vertices: true) }
+        Button("Все рёбра, вершины острые") { model.roundAll(vertices: false) }
+        Divider()
+        Menu("Рёбра") {
+            edgeSection("Вдоль X", axis: 0)
+            edgeSection("Вдоль Y", axis: 1)
+            edgeSection("Вертикальные", axis: 2)
+        }
+        Menu("Вершины") {
+            ForEach(0..<8, id: \.self) { v in
+                Toggle(BoxRounding.vertexName(v), isOn: Binding(
+                    get: { model.isVertexRounded(v) },
+                    set: { model.setVertex(v, $0) }
+                ))
+            }
+        }
+        Divider()
+        Button("Убрать скругление") { model.clearRounding() }
+            .disabled(!model.hasRounding)
+    }
+
+    private func edgeSection(_ title: String, axis: Int) -> some View {
+        Section(title) {
+            ForEach(axis * 4..<axis * 4 + 4, id: \.self) { e in
+                Toggle(BoxRounding.edgeName(e), isOn: Binding(
+                    get: { model.isEdgeRounded(e) },
+                    set: { model.setEdge(e, $0) }
+                ))
+            }
+        }
     }
 }
 

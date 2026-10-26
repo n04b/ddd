@@ -39,6 +39,8 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var rotation: Vec3 = .zero
     /// Блок: X × Y × Z. Сфера: диаметр во всех трёх. Цилиндр: диаметр в X и Y, высота в Z.
     var size: Vec3 = Vec3(20, 20, 20)
+    /// Скругление рёбер и вершин блока. nil — острые; в старых файлах поля нет.
+    var rounding: BoxRounding?
     var children: [Node] = []
 
     static let nilID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
@@ -47,7 +49,10 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
 
     var summary: String {
         switch kind {
-        case .box: return "\(Fmt.number(size.x))×\(Fmt.number(size.y))×\(Fmt.number(size.z))"
+        case .box:
+            let dims = "\(Fmt.number(size.x))×\(Fmt.number(size.y))×\(Fmt.number(size.z))"
+            guard let r = rounding?.radius else { return dims }
+            return dims + " R\(Fmt.number(r))"
         case .sphere: return "Ø\(Fmt.number(size.x))"
         case .cylinder: return "Ø\(Fmt.number(size.x))×\(Fmt.number(size.z))"
         case .group: return "\(children.count)"
