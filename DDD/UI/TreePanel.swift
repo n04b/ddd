@@ -86,6 +86,8 @@ private struct TreeRow: View {
     let node: Node
     let depth: Int
     @State private var hovering = false
+    @State private var eyeHovering = false
+    @State private var optionDown = false
     @State private var dropTargeted = false
 
     init(model: EditorModel, node: Node, depth: Int) {
@@ -162,6 +164,8 @@ private struct TreeRow: View {
             Spacer(minLength: 4)
 
             if hovering || !node.visible {
+                // ⌥ над глазом — «соло», как у дорожки в DAW: глаз заливается.
+                let solo = eyeHovering && optionDown
                 Button {
                     if NSEvent.modifierFlags.contains(.option) {
                         model.soloVisibility(node.id)
@@ -169,13 +173,15 @@ private struct TreeRow: View {
                         model.setVisible(node.id, !node.visible)
                     }
                 } label: {
-                    Image(systemName: node.visible ? "eye" : "eye.slash")
+                    Image(systemName: solo ? "eye.fill" : (node.visible ? "eye" : "eye.slash"))
                         .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.secondary)
+                        .foregroundStyle(solo ? Theme.cyan : Theme.secondary)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { eyeHovering = $0 }
+                .onModifierKeysChanged(mask: .option) { _, keys in optionDown = keys.contains(.option) }
                 .help((node.visible ? "Hide" : "Show") + " · ⌥-click — show only this, again — show all")
             }
         }
@@ -199,7 +205,11 @@ private struct TreeRow: View {
         }
         .opacity(node.visible ? 1 : 0.45)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            hovering = inside
+            // Кнопка глаза исчезает вместе с наведением и может не получить выход.
+            if !inside { eyeHovering = false }
+        }
         .onTapGesture {
             if NSEvent.modifierFlags.contains(.command) {
                 model.toggleSelection(node.id)
