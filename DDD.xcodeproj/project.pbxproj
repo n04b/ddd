@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		0C474A3F308ED85700CC5553 /* 3d.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = 3d.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0C474A3F308ED85700CC5553 /* DDD.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DDD.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		0C474A41308ED85700CC5553 /* 3d */ = {
+		0C474A41308ED85700CC5553 /* DDD */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = 3d;
+			path = DDD;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		0C474A36308ED85700CC5553 = {
 			isa = PBXGroup;
 			children = (
-				0C474A41308ED85700CC5553 /* 3d */,
+				0C474A41308ED85700CC5553 /* DDD */,
 				0C474A40308ED85700CC5553 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		0C474A40308ED85700CC5553 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				0C474A3F308ED85700CC5553 /* 3d.app */,
+				0C474A3F308ED85700CC5553 /* DDD.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		0C474A3E308ED85700CC5553 /* 3d */ = {
+		0C474A3E308ED85700CC5553 /* DDD */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 0C474A4A308ED85800CC5553 /* Build configuration list for PBXNativeTarget "3d" */;
+			buildConfigurationList = 0C474A4A308ED85800CC5553 /* Build configuration list for PBXNativeTarget "DDD" */;
 			buildPhases = (
 				0C474A3B308ED85700CC5553 /* Sources */,
 				0C474A3C308ED85700CC5553 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				0C474A41308ED85700CC5553 /* 3d */,
+				0C474A41308ED85700CC5553 /* DDD */,
 			);
-			name = 3d;
+			name = DDD;
 			packageProductDependencies = (
 			);
-			productName = 3d;
-			productReference = 0C474A3F308ED85700CC5553 /* 3d.app */;
+			productName = DDD;
+			productReference = 0C474A3F308ED85700CC5553 /* DDD.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 0C474A3A308ED85700CC5553 /* Build configuration list for PBXProject "3d" */;
+			buildConfigurationList = 0C474A3A308ED85700CC5553 /* Build configuration list for PBXProject "DDD" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				0C474A3E308ED85700CC5553 /* 3d */,
+				0C474A3E308ED85700CC5553 /* DDD */,
 			);
 		};
 /* End PBXProject section */
@@ -313,7 +313,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		0C474A3A308ED85700CC5553 /* Build configuration list for PBXProject "3d" */ = {
+		0C474A3A308ED85700CC5553 /* Build configuration list for PBXProject "DDD" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0C474A48308ED85800CC5553 /* Debug */,
@@ -322,7 +322,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		0C474A4A308ED85800CC5553 /* Build configuration list for PBXNativeTarget "3d" */ = {
+		0C474A4A308ED85800CC5553 /* Build configuration list for PBXNativeTarget "DDD" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0C474A4B308ED85800CC5553 /* Debug */,

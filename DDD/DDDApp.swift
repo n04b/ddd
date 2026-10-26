@@ -1,6 +1,6 @@
 //
-//  _dApp.swift
-//  3d
+//  DDDApp.swift
+//  DDD
 //
 //  Created by Mikhail Rogalev on 26/10/2026.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct _dApp: App {
+struct DDDApp: App {
     @State private var model = EditorModel()
 
     var body: some Scene {

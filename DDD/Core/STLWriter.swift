@@ -14,7 +14,7 @@ nonisolated enum STLWriter {
         data.reserveCapacity(84 + triangles * 50)
 
         var header = [UInt8](repeating: 0x20, count: 80)
-        let title = Array("3d editor MVP binary STL, units: mm".utf8)
+        let title = Array("DDD editor MVP binary STL, units: mm".utf8)
         for i in 0..<min(title.count, header.count) { header[i] = title[i] }
         data.append(contentsOf: header)
         appendUInt32(&data, UInt32(triangles))
