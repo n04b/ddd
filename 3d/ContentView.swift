@@ -17,7 +17,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             VisualEffectBackground()
-            Color.black.opacity(0.32)
+            Color.black.opacity(0.55)
             ViewportView(model: model)
 
             // Полоса под заголовком: за неё можно таскать окно.
@@ -68,8 +68,6 @@ struct ContentView: View {
                 if let toast = model.toast {
                     ToastView(model: model, toast: toast)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    HintView()
                 }
             }
             .padding(.bottom, 14)

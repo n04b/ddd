@@ -74,14 +74,6 @@ struct StatusView: View {
     }
 }
 
-struct HintView: View {
-    var body: some View {
-        Text("тяни — вращение · ⇧ тяни — панорама · щипок — масштаб · двойной клик — внутрь группы")
-            .font(Theme.label(10.5))
-            .foregroundStyle(Theme.tertiary)
-    }
-}
-
 struct ToastView: View {
     let model: EditorModel
     let toast: Toast

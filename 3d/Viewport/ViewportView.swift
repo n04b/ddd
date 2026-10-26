@@ -184,6 +184,15 @@ final class ViewportNSView: MTKView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let step: Double = flags.contains(.shift) ? 10 : (flags.contains(.option) ? 0.1 : 1)
 
+        // Cmd + ↑/↓ — по вертикали (ось Z).
+        if flags.contains(.command) {
+            switch event.keyCode {
+            case 126: model.nudge(Vec3(0, 0, step)); return
+            case 125: model.nudge(Vec3(0, 0, -step)); return
+            default: break
+            }
+        }
+
         switch event.keyCode {
         case 123: model.nudge(Vec3(-step, 0, 0)); return
         case 124: model.nudge(Vec3(step, 0, 0)); return

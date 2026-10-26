@@ -53,10 +53,6 @@ struct TreePanel: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Text("ОБЪЕКТЫ")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1)
-                .foregroundStyle(Theme.secondary)
             Text("\(model.doc.allNodes().count)")
                 .font(Theme.mono(10))
                 .foregroundStyle(Theme.cyan.opacity(0.8))
