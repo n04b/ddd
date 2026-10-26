@@ -155,7 +155,11 @@ private struct TreeRow: View {
 
             if hovering || !node.visible {
                 Button {
-                    model.setVisible(node.id, !node.visible)
+                    if NSEvent.modifierFlags.contains(.option) {
+                        model.soloVisibility(node.id)
+                    } else {
+                        model.setVisible(node.id, !node.visible)
+                    }
                 } label: {
                     Image(systemName: node.visible ? "eye" : "eye.slash")
                         .font(.system(size: 10.5))
@@ -164,7 +168,7 @@ private struct TreeRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(node.visible ? "Hide" : "Show")
+                .help((node.visible ? "Hide" : "Show") + " · ⌥-click — show only this, again — show all")
             }
         }
         .padding(.leading, CGFloat(depth) * 14 + 4)

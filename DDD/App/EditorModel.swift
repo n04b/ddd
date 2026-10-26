@@ -410,6 +410,32 @@ final class EditorModel {
         }
     }
 
+    /// ⌥-клик по глазу: виден только этот объект — с предками, чтобы он не пропал
+    /// вместе со скрытой группой, и с потомками. Повторный ⌥-клик показывает всё.
+    func soloVisibility(_ id: UUID) {
+        guard doc.node(id) != nil else { return }
+        let keep = soloSet(id)
+        let isSolo = doc.allNodes().allSatisfy { keep.contains($0.id) ? $0.visible : !$0.visible }
+        mutate { document in
+            for node in document.allNodes() {
+                document.update(node.id) { $0.visible = isSolo || keep.contains(node.id) }
+            }
+        }
+    }
+
+    private func soloSet(_ id: UUID) -> Set<UUID> {
+        var keep = Set(doc.ancestors(of: id))
+        keep.insert(id)
+        if let node = doc.node(id) {
+            var stack = node.children
+            while let child = stack.popLast() {
+                keep.insert(child.id)
+                stack.append(contentsOf: child.children)
+            }
+        }
+        return keep
+    }
+
     func setMode(_ ids: [UUID], _ mode: NodeMode) {
         mutate { document in
             for id in ids {
