@@ -289,7 +289,15 @@ nonisolated enum CSG {
         return ta.allPolygons()
     }
 
+    /// Полигоны вне габарита другого тела лежат вне его, поэтому в пересечение не попадают.
     static func intersect(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
+        if a.isEmpty || b.isEmpty { return [] }
+        let pa = partition(a, near: bounds(of: b))
+        let pb = partition(b, near: bounds(of: a))
+        return bspIntersect(pa.near, pb.near)
+    }
+
+    private static func bspIntersect(_ a: [CSGPolygon], _ b: [CSGPolygon]) -> [CSGPolygon] {
         if a.isEmpty || b.isEmpty { return [] }
         let ta = BSPNode(a)
         let tb = BSPNode(b)

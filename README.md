@@ -7,7 +7,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 ## Features
 
 - **Primitives:** box, sphere and cylinder, each with a position, rotation and size.
-- **Solids and holes.** A group is a boolean operation: the union of its solids minus the union of its holes. A hole only cuts inside its own group.
+- **Solids, holes and masks.** A group is a boolean operation: (union of its solids − union of its holes) ∩ union of its masks. A mask is a 3D clipping mask: only the part of the group inside it remains. Holes and masks only act inside their own group.
 - **Box fillets and chamfers.** Each of the 12 edges can be filleted or get a 45° chamfer, and each of the 8 corners is either auto or cut. You edit them with handles right on the model.
 - **Parametric model.** A project stores parameters, not triangles, so you can change sizes and fillets at any time.
 - **Background computation.** While you drag a value, a draft is shown; the exact geometry is computed when you release.
@@ -35,6 +35,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 |---|---|
 | B / S / C | Add a box, sphere or cylinder |
 | H | Toggle solid / hole |
+| M | Toggle solid / mask |
 | G | Group the selection |
 | F | Frame the selection |
 | 1 / 2 / 3 / 4 | View: isometric, top, front, right |
@@ -56,6 +57,7 @@ Keys work in any keyboard layout, because the app reads key codes rather than ch
 | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 | Add a box, sphere or cylinder |
 | ⌘G / ⇧⌘G | Group / ungroup |
 | ⌥⌘H | Toggle solid / hole |
+| ⌥⌘M | Toggle solid / mask |
 | ⌘D | Duplicate |
 | ⌥⌘F | Frame the selection |
 
@@ -64,7 +66,7 @@ Keys work in any keyboard layout, because the app reads key codes rather than ch
 - Drag a row onto a group to put the object inside it, or onto the empty space below the list to move it to the top level.
 - Double-click a name to rename it.
 - The eye hides or shows an object. ⌥-click the eye to show only that object; ⌥-click it again to show everything.
-- The context menu has rename, solid or hole, grouping, duplicate, delete and, for boxes, fillet presets.
+- The context menu has rename, solid, hole or mask, grouping, duplicate, delete and, for boxes, fillet presets.
 
 ### Inspector
 

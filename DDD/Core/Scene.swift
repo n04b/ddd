@@ -1,7 +1,8 @@
 //
 //  Scene.swift
 //  Документ: дерево узлов. Примитивы — листья, группы — булевы операции:
-//  результат группы = объединение тел минус объединение отверстий.
+//  результат группы = (объединение тел − объединение отверстий) ∩ объединение масок.
+//  Маска — 3D clipping mask: от содержимого группы остаётся только то, что внутри неё.
 //
 
 import Foundation
@@ -25,6 +26,7 @@ nonisolated enum NodeKind: String, Codable, Hashable, Sendable {
 nonisolated enum NodeMode: String, Codable, Hashable, Sendable {
     case solid
     case hole
+    case mask
 }
 
 nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {

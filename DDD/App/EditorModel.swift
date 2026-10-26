@@ -445,11 +445,20 @@ final class EditorModel {
         if mode == .hole, ids.contains(where: { isTopLevel($0) }) {
             showToast("A hole only cuts inside a group: select it together with a solid (⌘-click) and press ⌘G")
         }
+        if mode == .mask, ids.contains(where: { isTopLevel($0) }) {
+            showToast("A mask only clips inside a group: select it together with the objects to clip (⌘-click) and press ⌘G")
+        }
     }
 
     func toggleHole() {
         guard let current = primary else { return }
-        setMode(topmostSelected(), current.mode == .solid ? .hole : .solid)
+        setMode(topmostSelected(), current.mode == .hole ? .solid : .hole)
+    }
+
+    /// Маска — 3D clipping mask: в группе остаётся только то, что внутри неё.
+    func toggleMask() {
+        guard let current = primary else { return }
+        setMode(topmostSelected(), current.mode == .mask ? .solid : .mask)
     }
 
     func setPosition(_ id: UUID, axis: Int, _ value: Double) {

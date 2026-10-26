@@ -35,13 +35,13 @@ private struct MultiSelectionInspector: View {
 
     var body: some View {
         let nodes = model.selection.compactMap { model.doc.node($0) }
-        let allHoles = nodes.allSatisfy { $0.mode == .hole }
+        let common = nodes.first.map { first in nodes.allSatisfy { $0.mode == first.mode } ? first.mode : .solid } ?? .solid
 
         VStack(alignment: .leading, spacing: 12) {
             Text("Selected: \(nodes.count)")
                 .font(Theme.label(13, .semibold))
                 .foregroundStyle(Theme.text)
-            ModeSwitch(mode: allHoles ? .hole : .solid) { mode in
+            ModeSwitch(mode: common) { mode in
                 model.setMode(model.selection, mode)
             }
             Button {
@@ -56,7 +56,7 @@ private struct MultiSelectionInspector: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text("Solids are merged; holes cut the solids in their group.")
+            Text("Solids are merged, holes cut them, and masks keep only what is inside them — within their group.")
                 .font(Theme.label(10.5))
                 .foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -87,6 +87,13 @@ private struct NodeInspector: View {
                 Text("A hole only cuts inside a group. Select it together with a solid (⌘-click) and press ⌘G.")
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.orange.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if node.mode == .mask && model.isTopLevel(node.id) {
+                Text("A mask only clips inside a group. Select it together with the objects to clip (⌘-click) and press ⌘G.")
+                    .font(Theme.label(10.5))
+                    .foregroundStyle(Theme.violet.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -166,7 +173,9 @@ private struct NodeInspector: View {
                     Text("—").foregroundStyle(Theme.tertiary)
                 }
                 let solids = node.children.filter { $0.mode == .solid }.count
-                Text("Solids: \(solids) · holes: \(node.children.count - solids)")
+                let holes = node.children.filter { $0.mode == .hole }.count
+                let masks = node.children.count - solids - holes
+                Text("Solids: \(solids) · holes: \(holes)" + (masks > 0 ? " · masks: \(masks)" : ""))
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.tertiary)
             }
@@ -386,6 +395,7 @@ struct ModeSwitch: View {
         HStack(spacing: 2) {
             segment("Solid", .solid, Theme.emerald)
             segment("Hole", .hole, Theme.orange)
+            segment("Mask", .mask, Theme.violet)
         }
         .padding(2)
         .background(Capsule().fill(Theme.field))

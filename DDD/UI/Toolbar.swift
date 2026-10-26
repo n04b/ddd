@@ -34,6 +34,11 @@ struct ToolbarView: View {
                  enabled: hasSelection) {
                 model.toggleHole()
             }
+            tool("circle.dashed.inset.filled", "Solid / mask — M",
+                 tint: primary?.mode == .mask ? Theme.violet : nil,
+                 enabled: hasSelection) {
+                model.toggleMask()
+            }
 
             divider
 

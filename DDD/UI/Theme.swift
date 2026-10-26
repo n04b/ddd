@@ -10,6 +10,7 @@ enum Theme {
     static let cyan = Color(red: 0.30, green: 0.84, blue: 0.98)
     static let orange = Color(red: 1.00, green: 0.72, blue: 0.42)
     static let emerald = Color(red: 0.31, green: 0.87, blue: 0.64)
+    static let violet = Color(red: 0.72, green: 0.58, blue: 1.00)
     static let red = Color(red: 1.00, green: 0.47, blue: 0.44)
     static let axisX = Color(red: 1.00, green: 0.45, blue: 0.45)
     static let axisY = Color(red: 0.45, green: 0.90, blue: 0.55)
@@ -113,6 +114,7 @@ extension NodeKind {
 extension Node {
     var tint: Color {
         if mode == .hole { return Theme.orange }
+        if mode == .mask { return Theme.violet }
         return kind == .group ? Theme.cyan : Theme.emerald
     }
 }

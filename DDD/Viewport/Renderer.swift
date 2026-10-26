@@ -26,6 +26,8 @@ enum Palette {
     static let solidSelected = SIMD4<Float>(0.52, 0.80, 0.93, 1)
     static let hole = SIMD4<Float>(1.00, 0.62, 0.25, 0.30)
     static let holeXray = SIMD4<Float>(1.00, 0.62, 0.25, 0.07)
+    static let mask = SIMD4<Float>(0.72, 0.58, 1.00, 0.22)
+    static let maskXray = SIMD4<Float>(0.72, 0.58, 1.00, 0.06)
     static let selection = SIMD4<Float>(0.30, 0.84, 0.98, 0.30)
     static let selectionXray = SIMD4<Float>(0.30, 0.84, 0.98, 0.10)
     static let filletXray = SIMD4<Float>(0.68, 0.72, 0.79, 0.30)
@@ -173,6 +175,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             submit(mesh, Palette.holeXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.hole, lit: true, depth: depthTest, model: matrix)
         }
+        for id in scene.masks {
+            guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
+            submit(mesh, Palette.maskXray, lit: false, depth: depthAlways, model: matrix)
+            submit(mesh, Palette.mask, lit: true, depth: depthTest, model: matrix)
+        }
 
         // 3½. Деталь в режиме скруглений — рентгеном: задние и нижние рёбра видны сквозь тело.
         if let xray, let mesh = meshBuffers[xray], let matrix = scene.matrices[xray] {
@@ -206,20 +213,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         meshBuffers = buffers
     }
 
-    /// Мировые матрицы видимых узлов и список видимых отверстий.
-    private static func collect(_ document: SceneDocument) -> (matrices: [UUID: simd_float4x4], holes: [UUID]) {
+    /// Мировые матрицы видимых узлов, видимые отверстия и маски.
+    private static func collect(_ document: SceneDocument) -> (matrices: [UUID: simd_float4x4], holes: [UUID], masks: [UUID]) {
         var matrices: [UUID: simd_float4x4] = [:]
         var holes: [UUID] = []
+        var masks: [UUID] = []
         func walk(_ nodes: [Node], parent: Pose) {
             for node in nodes where node.visible {
                 let pose = parent * node.pose
                 matrices[node.id] = matrix(pose)
                 if node.mode == .hole { holes.append(node.id) }
+                if node.mode == .mask { masks.append(node.id) }
                 walk(node.children, parent: pose)
             }
         }
         walk(document.nodes, parent: .identity)
-        return (matrices, holes)
+        return (matrices, holes, masks)
     }
 
     private static func matrix(_ pose: Pose) -> simd_float4x4 {

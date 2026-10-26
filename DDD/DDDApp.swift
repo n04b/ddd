@@ -56,6 +56,8 @@ struct DDDApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("Solid / Hole") { model.toggleHole() }
                     .keyboardShortcut("h", modifiers: [.command, .option])
+                Button("Solid / Mask") { model.toggleMask() }
+                    .keyboardShortcut("m", modifiers: [.command, .option])
                 Menu("Fillets") {
                     FilletPresetItems(model: model)
                 }

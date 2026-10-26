@@ -292,6 +292,7 @@ final class ViewportNSView: MTKView {
         case 1: model.add(.sphere)        // S
         case 8: model.add(.cylinder)      // C
         case 4: model.toggleHole()        // H
+        case 46: model.toggleMask()       // M
         case 5: model.groupSelection()    // G
         case 3: model.frameSelection()    // F
         case 18: model.setView(.iso)      // 1

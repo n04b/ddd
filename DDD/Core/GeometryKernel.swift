@@ -153,7 +153,7 @@ nonisolated final class GeometryKernel {
 
         let result: [CSGPolygon]
         if node.kind == .group && draft {
-            // Тела просто складываются, отверстия видны поверх рентгеном.
+            // Тела просто складываются, отверстия и маски видны поверх рентгеном.
             result = node.children
                 .filter { $0.visible && $0.mode == .solid }
                 .flatMap { CSG.transformed(localPolygons($0), by: $0.pose) }
@@ -161,6 +161,9 @@ nonisolated final class GeometryKernel {
             var solid: [CSGPolygon] = []
             var solidBox = AABB.empty
             var holes: [(polygons: [CSGPolygon], box: AABB)] = []
+            var mask: [CSGPolygon] = []
+            var maskBox = AABB.empty
+            var hasMask = false
             for child in node.children where child.visible {
                 let polygons = CSG.transformed(localPolygons(child), by: child.pose)
                 guard !polygons.isEmpty else { continue }
@@ -173,12 +176,23 @@ nonisolated final class GeometryKernel {
                         solid = CSG.union(solid, polygons)
                     }
                     solidBox.formUnion(box)
-                } else {
+                } else if child.mode == .hole {
                     holes.append((polygons, box))
+                } else {
+                    hasMask = true
+                    if mask.isEmpty || !maskBox.intersects(box) {
+                        mask.append(contentsOf: polygons)
+                    } else {
+                        mask = CSG.union(mask, polygons)
+                    }
+                    maskBox.formUnion(box)
                 }
             }
             for hole in holes where hole.box.intersects(solidBox) {
                 solid = CSG.subtract(solid, hole.polygons)
+            }
+            if hasMask {
+                solid = CSG.intersect(solid, mask)
             }
             result = solid
         } else {

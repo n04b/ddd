@@ -98,6 +98,7 @@ private struct TreeRow: View {
         let selected = model.selection.contains(node.id)
         let isGroup = node.kind == .group
         let isTopLevelHole = node.mode == .hole && depth == 0
+        let isTopLevelMask = node.mode == .mask && depth == 0
 
         HStack(spacing: 6) {
             if isGroup {
@@ -149,6 +150,13 @@ private struct TreeRow: View {
                     .font(Theme.label(9.5))
                     .foregroundStyle(Theme.orange.opacity(0.85))
                     .help("A hole only cuts inside a group. Group it with a solid.")
+            }
+
+            if isTopLevelMask {
+                Text("no clip")
+                    .font(Theme.label(9.5))
+                    .foregroundStyle(Theme.violet.opacity(0.85))
+                    .help("A mask only clips inside a group. Group it with the objects to clip.")
             }
 
             Spacer(minLength: 4)
@@ -216,8 +224,10 @@ private struct TreeRow: View {
         }
         .contextMenu {
             Button("Rename") { model.renamingID = node.id }
-            Button(node.mode == .hole ? "Make solid" : "Make hole") {
-                model.setMode([node.id], node.mode == .hole ? .solid : .hole)
+            ForEach([(NodeMode.solid, "Make solid"), (.hole, "Make hole"), (.mask, "Make mask")], id: \.0) { mode, title in
+                if node.mode != mode {
+                    Button(title) { model.setMode([node.id], mode) }
+                }
             }
             if node.kind == .box {
                 Menu("Fillets") {
