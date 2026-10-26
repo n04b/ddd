@@ -17,19 +17,19 @@ struct ToolbarView: View {
         let primary = model.primary
 
         HStack(spacing: 2) {
-            tool("cube", "Параллелепипед — B") { model.add(.box) }
-            tool("circle", "Сфера — S") { model.add(.sphere) }
-            tool("cylinder", "Цилиндр — C") { model.add(.cylinder) }
+            tool("cube", "Box — B") { model.add(.box) }
+            tool("circle", "Sphere — S") { model.add(.sphere) }
+            tool("cylinder", "Cylinder — C") { model.add(.cylinder) }
 
             divider
 
-            tool("square.on.square", "Сгруппировать — G или ⌘G", enabled: hasSelection) {
+            tool("square.on.square", "Group — G or ⌘G", enabled: hasSelection) {
                 model.groupSelection()
             }
-            tool("square.on.square.dashed", "Разгруппировать — ⇧⌘G", enabled: primary?.kind == .group) {
+            tool("square.on.square.dashed", "Ungroup — ⇧⌘G", enabled: primary?.kind == .group) {
                 model.ungroupSelection()
             }
-            tool("circle.dashed", "Тело / отверстие — H",
+            tool("circle.dashed", "Solid / hole — H",
                  tint: primary?.mode == .hole ? Theme.orange : nil,
                  enabled: hasSelection) {
                 model.toggleHole()
@@ -37,17 +37,17 @@ struct ToolbarView: View {
 
             divider
 
-            tool("plus.square.on.square", "Дублировать — ⌘D", enabled: hasSelection) {
+            tool("plus.square.on.square", "Duplicate — ⌘D", enabled: hasSelection) {
                 model.duplicateSelection()
             }
-            tool("trash", "Удалить — ⌫", enabled: hasSelection) {
+            tool("trash", "Delete — ⌫", enabled: hasSelection) {
                 model.deleteSelection()
             }
 
             divider
 
-            tool("arrow.uturn.backward", "Отменить — ⌘Z", enabled: model.canUndo) { model.undo() }
-            tool("arrow.uturn.forward", "Повторить — ⇧⌘Z", enabled: model.canRedo) { model.redo() }
+            tool("arrow.uturn.backward", "Undo — ⌘Z", enabled: model.canUndo) { model.undo() }
+            tool("arrow.uturn.forward", "Redo — ⇧⌘Z", enabled: model.canRedo) { model.redo() }
 
             divider
 
@@ -67,7 +67,7 @@ struct ToolbarView: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .help("Экспорт деталей в STL — ⌘E")
+            .help("Export parts to STL — ⌘E")
             .padding(.leading, 4)
         }
         .padding(.horizontal, 8)

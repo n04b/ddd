@@ -102,10 +102,10 @@ extension NodeKind {
 
     var title: String {
         switch self {
-        case .box: return "Параллелепипед"
-        case .sphere: return "Сфера"
-        case .cylinder: return "Цилиндр"
-        case .group: return "Группа"
+        case .box: return "Box"
+        case .sphere: return "Sphere"
+        case .cylinder: return "Cylinder"
+        case .group: return "Group"
         }
     }
 }

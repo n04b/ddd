@@ -53,14 +53,14 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     init?(view: MTKView, model: EditorModel) {
         guard let device = view.device, let queue = device.makeCommandQueue() else {
-            print("Renderer: Metal недоступен")
+            print("Renderer: Metal is unavailable")
             return nil
         }
         let library: MTLLibrary
         do {
             library = try device.makeLibrary(source: ShaderSource.main, options: nil)
         } catch {
-            print("Renderer: ошибка компиляции шейдера: \(error)")
+            print("Renderer: shader compilation failed: \(error)")
             return nil
         }
 
@@ -84,7 +84,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
         } catch {
-            print("Renderer: не удалось собрать pipeline: \(error)")
+            print("Renderer: failed to build pipeline: \(error)")
             return nil
         }
 

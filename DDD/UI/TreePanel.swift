@@ -26,7 +26,7 @@ struct TreePanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     if model.doc.nodes.isEmpty {
-                        Text("Пусто. B — блок, S — сфера, C — цилиндр")
+                        Text("Empty. B — box, S — sphere, C — cylinder")
                             .font(Theme.label(11))
                             .foregroundStyle(Theme.tertiary)
                             .padding(.horizontal, 8)
@@ -138,10 +138,10 @@ private struct TreeRow: View {
                 .lineLimit(1)
 
             if isTopLevelHole {
-                Text("не режет")
+                Text("no cut")
                     .font(Theme.label(9.5))
                     .foregroundStyle(Theme.orange.opacity(0.85))
-                    .help("Отверстие вырезает только внутри группы. Сгруппируйте его с телом.")
+                    .help("A hole only cuts inside a group. Group it with a solid.")
             }
 
             Spacer(minLength: 4)
@@ -157,7 +157,7 @@ private struct TreeRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(node.visible ? "Скрыть" : "Показать")
+                .help(node.visible ? "Hide" : "Show")
             }
         }
         .padding(.leading, CGFloat(depth) * 14 + 4)
@@ -204,27 +204,27 @@ private struct TreeRow: View {
             dropTargeted = targeted
         }
         .contextMenu {
-            Button("Переименовать") { model.renamingID = node.id }
-            Button(node.mode == .hole ? "Сделать телом" : "Сделать отверстием") {
+            Button("Rename") { model.renamingID = node.id }
+            Button(node.mode == .hole ? "Make solid" : "Make hole") {
                 model.setMode([node.id], node.mode == .hole ? .solid : .hole)
             }
             Divider()
-            Button("Сгруппировать выделенное") {
+            Button("Group selection") {
                 if !model.selection.contains(node.id) { model.select(node.id) }
                 model.groupSelection()
             }
             if isGroup {
-                Button("Разгруппировать") {
+                Button("Ungroup") {
                     model.select(node.id)
                     model.ungroupSelection()
                 }
             }
-            Button("Дублировать") {
+            Button("Duplicate") {
                 if !model.selection.contains(node.id) { model.select(node.id) }
                 model.duplicateSelection()
             }
             Divider()
-            Button("Удалить") {
+            Button("Delete") {
                 if !model.selection.contains(node.id) { model.select(node.id) }
                 model.deleteSelection()
             }

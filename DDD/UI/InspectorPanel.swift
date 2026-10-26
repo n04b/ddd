@@ -38,7 +38,7 @@ private struct MultiSelectionInspector: View {
         let allHoles = nodes.allSatisfy { $0.mode == .hole }
 
         VStack(alignment: .leading, spacing: 12) {
-            Text("Выделено: \(nodes.count)")
+            Text("Selected: \(nodes.count)")
                 .font(Theme.label(13, .semibold))
                 .foregroundStyle(Theme.text)
             ModeSwitch(mode: allHoles ? .hole : .solid) { mode in
@@ -47,7 +47,7 @@ private struct MultiSelectionInspector: View {
             Button {
                 model.groupSelection()
             } label: {
-                Label("Сгруппировать", systemImage: "square.on.square")
+                Label("Group", systemImage: "square.on.square")
                     .font(Theme.label(12, .medium))
                     .frame(maxWidth: .infinity)
                     .frame(height: 28)
@@ -56,7 +56,7 @@ private struct MultiSelectionInspector: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text("Тела объединяются, отверстия вырезаются из тел своей группы.")
+            Text("Solids are merged; holes cut the solids in their group.")
                 .font(Theme.label(10.5))
                 .foregroundStyle(Theme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -84,19 +84,19 @@ private struct NodeInspector: View {
             }
 
             if node.mode == .hole && model.isTopLevel(node.id) {
-                Text("Отверстие режет только внутри группы. Выделите его вместе с телом (⌘-клик) и нажмите ⌘G.")
+                Text("A hole only cuts inside a group. Select it together with a solid (⌘-click) and press ⌘G.")
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.orange.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            section("ПОЛОЖЕНИЕ") {
+            section("POSITION") {
                 axisField("X", Theme.axisX, node.position.x) { model.setPosition(node.id, axis: 0, $0) }
                 axisField("Y", Theme.axisY, node.position.y) { model.setPosition(node.id, axis: 1, $0) }
                 axisField("Z", Theme.axisZ, node.position.z) { model.setPosition(node.id, axis: 2, $0) }
             }
 
-            section("ПОВОРОТ") {
+            section("ROTATION") {
                 angleField("X", Theme.axisX, node.rotation.x) { model.setRotation(node.id, axis: 0, $0) }
                 angleField("Y", Theme.axisY, node.rotation.y) { model.setRotation(node.id, axis: 1, $0) }
                 angleField("Z", Theme.axisZ, node.rotation.z) { model.setRotation(node.id, axis: 2, $0) }
@@ -121,7 +121,7 @@ private struct NodeInspector: View {
                 .foregroundStyle(node.tint)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                TextField("Имя", text: $name)
+                TextField("Name", text: $name)
                     .textFieldStyle(.plain)
                     .font(Theme.label(13, .semibold))
                     .foregroundStyle(Theme.text)
@@ -142,31 +142,31 @@ private struct NodeInspector: View {
         let bounds = model.bounds(of: node.id)
         switch node.kind {
         case .box:
-            section("РАЗМЕРЫ") {
-                sizeField("Ш", 0, node.size.x)
-                sizeField("Г", 1, node.size.y)
-                sizeField("В", 2, node.size.z)
+            section("SIZE") {
+                sizeField("W", 0, node.size.x)
+                sizeField("D", 1, node.size.y)
+                sizeField("H", 2, node.size.z)
             }
         case .sphere:
-            section("РАЗМЕРЫ") {
+            section("SIZE") {
                 sizeField("Ø", 0, node.size.x)
             }
         case .cylinder:
-            section("РАЗМЕРЫ") {
+            section("SIZE") {
                 sizeField("Ø", 0, node.size.x)
-                sizeField("В", 2, node.size.z)
+                sizeField("H", 2, node.size.z)
             }
         case .group:
-            section("ГАБАРИТЫ") {
+            section("BOUNDS") {
                 if let size = bounds?.size {
-                    Text("\(Fmt.number(size.x)) × \(Fmt.number(size.y)) × \(Fmt.number(size.z)) мм")
+                    Text("\(Fmt.number(size.x)) × \(Fmt.number(size.y)) × \(Fmt.number(size.z)) mm")
                         .font(Theme.mono(11, .medium))
                         .foregroundStyle(Theme.text)
                 } else {
                     Text("—").foregroundStyle(Theme.tertiary)
                 }
                 let solids = node.children.filter { $0.mode == .solid }.count
-                Text("Тел: \(solids) · отверстий: \(node.children.count - solids)")
+                Text("Solids: \(solids) · holes: \(node.children.count - solids)")
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.tertiary)
             }
@@ -176,9 +176,9 @@ private struct NodeInspector: View {
     private var roundingSection: some View {
         let id = node.id
         let rounding = node.rounding ?? BoxRounding()
-        return section("СКРУГЛЕНИЕ") {
+        return section("FILLET") {
             HStack(spacing: 6) {
-                NumberField(label: "R", labelColor: Theme.secondary, value: model.roundingRadius(of: node), unit: "мм",
+                NumberField(label: "R", labelColor: Theme.secondary, value: model.roundingRadius(of: node), unit: "mm",
                             dragStep: 0.1, keyStep: 0.5, minimum: 0.1,
                             onChange: { model.setRoundingRadius(id, $0) },
                             onFinish: { model.breakCoalescing() })
@@ -186,7 +186,7 @@ private struct NodeInspector: View {
                     RoundingMenuItems(model: model)
                 } label: {
                     HStack(spacing: 4) {
-                        Text("Скруглить")
+                        Text("Round")
                             .font(Theme.label(11.5, .medium))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .bold))
@@ -201,8 +201,8 @@ private struct NodeInspector: View {
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.cyan.opacity(0.14)))
             }
             Text(rounding.isEmpty
-                 ? "Рёбра острые"
-                 : "Рёбер: \(rounding.roundedEdgeCount) из 12 · вершин: \(rounding.roundedVertexCount) из 8")
+                 ? "Sharp edges"
+                 : "Edges: \(rounding.roundedEdgeCount) of 12 · vertices: \(rounding.roundedVertexCount) of 8")
                 .font(Theme.label(10.5))
                 .foregroundStyle(Theme.tertiary)
         }
@@ -211,12 +211,12 @@ private struct NodeInspector: View {
     private var actions: some View {
         HStack(spacing: 4) {
             if node.kind == .group {
-                actionButton("square.on.square.dashed", "Разгруппировать") { model.ungroupSelection() }
+                actionButton("square.on.square.dashed", "Ungroup") { model.ungroupSelection() }
             } else {
-                actionButton("square.on.square", "Сгруппировать") { model.groupSelection() }
+                actionButton("square.on.square", "Group") { model.groupSelection() }
             }
-            actionButton("plus.square.on.square", "Дублировать") { model.duplicateSelection() }
-            actionButton("eye.slash", "Скрыть") { model.setVisible(node.id, false) }
+            actionButton("plus.square.on.square", "Duplicate") { model.duplicateSelection() }
+            actionButton("eye.slash", "Hide") { model.setVisible(node.id, false) }
             Spacer()
             Button {
                 model.deleteSelection()
@@ -228,7 +228,7 @@ private struct NodeInspector: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(HoverButtonStyle())
-            .help("Удалить")
+            .help("Delete")
         }
     }
 
@@ -243,7 +243,7 @@ private struct NodeInspector: View {
 
     private func axisField(_ label: String, _ color: Color, _ value: Double,
                            _ onChange: @escaping (Double) -> Void) -> some View {
-        NumberField(label: label, labelColor: color, value: value, unit: "мм",
+        NumberField(label: label, labelColor: color, value: value, unit: "mm",
                     dragStep: 0.1, keyStep: 1, minimum: nil,
                     onChange: onChange, onFinish: { model.breakCoalescing() })
     }
@@ -257,7 +257,7 @@ private struct NodeInspector: View {
 
     private func sizeField(_ label: String, _ axis: Int, _ value: Double) -> some View {
         let id = node.id
-        return NumberField(label: label, labelColor: Theme.secondary, value: value, unit: "мм",
+        return NumberField(label: label, labelColor: Theme.secondary, value: value, unit: "mm",
                            dragStep: 0.1, keyStep: 1, minimum: 0.01,
                            onChange: { model.setSize(id, axis: axis, $0) },
                            onFinish: { model.breakCoalescing() })
@@ -285,15 +285,15 @@ struct RoundingMenuItems: View {
     }
 
     var body: some View {
-        Button("Все рёбра и вершины") { model.roundAll(vertices: true) }
-        Button("Все рёбра, вершины острые") { model.roundAll(vertices: false) }
+        Button("All edges and vertices") { model.roundAll(vertices: true) }
+        Button("All edges, sharp vertices") { model.roundAll(vertices: false) }
         Divider()
-        Menu("Рёбра") {
-            edgeSection("Вдоль X", axis: 0)
-            edgeSection("Вдоль Y", axis: 1)
-            edgeSection("Вертикальные", axis: 2)
+        Menu("Edges") {
+            edgeSection("Along X", axis: 0)
+            edgeSection("Along Y", axis: 1)
+            edgeSection("Vertical", axis: 2)
         }
-        Menu("Вершины") {
+        Menu("Vertices") {
             ForEach(0..<8, id: \.self) { v in
                 Toggle(BoxRounding.vertexName(v), isOn: Binding(
                     get: { model.isVertexRounded(v) },
@@ -302,7 +302,7 @@ struct RoundingMenuItems: View {
             }
         }
         Divider()
-        Button("Убрать скругление") { model.clearRounding() }
+        Button("Remove fillets") { model.clearRounding() }
             .disabled(!model.hasRounding)
     }
 
@@ -325,8 +325,8 @@ struct ModeSwitch: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            segment("Тело", .solid, Theme.emerald)
-            segment("Отверстие", .hole, Theme.orange)
+            segment("Solid", .solid, Theme.emerald)
+            segment("Hole", .hole, Theme.orange)
         }
         .padding(2)
         .background(Capsule().fill(Theme.field))
@@ -398,7 +398,7 @@ struct NumberField: View {
                     }
                 }
                 .gesture(scrub)
-                .help("Тяните влево-вправо. ⇧ — быстрее, ⌥ — точнее")
+                .help("Drag left or right. ⇧ — faster, ⌥ — finer")
 
             TextField("", text: $text)
                 .textFieldStyle(.plain)

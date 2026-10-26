@@ -267,7 +267,7 @@ final class EditorModel {
         guard !ids.isEmpty else { return }
         let parents = Set(ids.map { doc.parentID(of: $0) })
         guard parents.count == 1, let parent = parents.first else {
-            showToast("Группировать можно только объекты одного уровня")
+            showToast("Only objects on the same level can be grouped")
             return
         }
         let siblings = doc.children(of: parent)
@@ -326,7 +326,7 @@ final class EditorModel {
             for id in ids {
                 guard let original = document.node(id) else { continue }
                 var copy = original.withNewIDs()
-                copy.name = original.name + " копия"
+                copy.name = original.name + " copy"
                 copy.position.x += 10
                 let index = (document.indexInParent(id) ?? 0) + 1
                 document.insert(copy, into: document.parentID(of: id), at: index)
@@ -345,7 +345,7 @@ final class EditorModel {
             for id in ids { document.remove(id) }
         }
         selection = []
-        showToast(ids.count == 1 ? "Удалено: \(firstName)" : "Удалено объектов: \(ids.count)", undo: true)
+        showToast(ids.count == 1 ? "Deleted: \(firstName)" : "Deleted \(ids.count) objects", undo: true)
     }
 
     /// Перенос в другую группу (или на верхний уровень) с сохранением положения в мире.
@@ -391,7 +391,7 @@ final class EditorModel {
             }
         }
         if mode == .hole, ids.contains(where: { isTopLevel($0) }) {
-            showToast("Отверстие вырезает только внутри группы: выделите его вместе с телом (⌘-клик) и нажмите ⌘G")
+            showToast("A hole only cuts inside a group: select it together with a solid (⌘-click) and press ⌘G")
         }
     }
 
@@ -630,12 +630,12 @@ final class EditorModel {
     func newProject() {
         replaceDocument(SceneDocument())
         projectURL = nil
-        showToast("Новый проект", undo: true)
+        showToast("New project", undo: true)
     }
 
     func openProject() {
         let panel = NSOpenPanel()
-        panel.title = "Открыть проект"
+        panel.title = "Open Project"
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] response in
@@ -645,9 +645,9 @@ final class EditorModel {
                 let loaded = try JSONDecoder().decode(SceneDocument.self, from: data)
                 self.replaceDocument(loaded)
                 self.projectURL = url
-                self.showToast("Открыт: \(url.lastPathComponent)", undo: true)
+                self.showToast("Opened: \(url.lastPathComponent)", undo: true)
             } catch {
-                self.showToast("Не удалось открыть: \(error.localizedDescription)")
+                self.showToast("Could not open: \(error.localizedDescription)")
             }
         }
     }
@@ -662,9 +662,9 @@ final class EditorModel {
 
     func saveProjectAs() {
         let panel = NSSavePanel()
-        panel.title = "Сохранить проект"
+        panel.title = "Save Project"
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = projectURL?.lastPathComponent ?? "Проект.json"
+        panel.nameFieldStringValue = projectURL?.lastPathComponent ?? "Project.json"
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
             self.projectURL = url
@@ -675,9 +675,9 @@ final class EditorModel {
     private func write(to url: URL) {
         do {
             try Persistence.save(doc, to: url)
-            showToast("Сохранено: \(url.lastPathComponent)")
+            showToast("Saved: \(url.lastPathComponent)")
         } catch {
-            showToast("Не удалось сохранить: \(error.localizedDescription)")
+            showToast("Could not save: \(error.localizedDescription)")
         }
     }
 
@@ -686,7 +686,7 @@ final class EditorModel {
         if isComputing || output.isDraft {
             exportWhenReady = true
             settle()
-            showToast("Экспорт после пересчёта…")
+            showToast("Exporting after computing…")
             return
         }
         let meshes = doc.nodes
@@ -694,11 +694,11 @@ final class EditorModel {
             .compactMap { node in output.meshes[node.id]?.transformed(by: node.pose) }
             .filter { $0.triangleCount > 0 }
         guard !meshes.isEmpty else {
-            showToast("Нечего экспортировать: нет видимых тел")
+            showToast("Nothing to export: no visible solids")
             return
         }
         let panel = NSSavePanel()
-        panel.title = "Экспорт STL"
+        panel.title = "Export STL"
         panel.allowedContentTypes = [UTType(filenameExtension: "stl") ?? .data]
         let base = projectURL?.deletingPathExtension().lastPathComponent ?? "model"
         panel.nameFieldStringValue = base + ".stl"
@@ -706,9 +706,9 @@ final class EditorModel {
             guard let self, response == .OK, let url = panel.url else { return }
             do {
                 try STLWriter.binary(meshes).write(to: url, options: .atomic)
-                self.showToast("Экспортировано: \(url.lastPathComponent)")
+                self.showToast("Exported: \(url.lastPathComponent)")
             } catch {
-                self.showToast("Не удалось экспортировать: \(error.localizedDescription)")
+                self.showToast("Could not export: \(error.localizedDescription)")
             }
         }
     }

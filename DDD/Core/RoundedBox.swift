@@ -78,18 +78,16 @@ nonisolated struct BoxRounding: Codable, Hashable, Sendable {
         var signs: [Int: Double] = [:]
         signs[l.b] = l.sb
         signs[l.c] = l.sc
-        return words(signs, neuter: true)
+        return words(signs)
     }
 
     static func vertexName(_ v: Int) -> String {
         let s = vertexSigns(v)
-        return words([0: s.x, 1: s.y, 2: s.z], neuter: false)
+        return words([0: s.x, 1: s.y, 2: s.z])
     }
 
-    private static func words(_ signs: [Int: Double], neuter: Bool) -> String {
-        let forms: [Int: (minus: String, plus: String)] = neuter
-            ? [2: ("нижнее", "верхнее"), 1: ("переднее", "заднее"), 0: ("левое", "правое")]
-            : [2: ("нижняя", "верхняя"), 1: ("передняя", "задняя"), 0: ("левая", "правая")]
+    private static func words(_ signs: [Int: Double]) -> String {
+        let forms: [Int: (minus: String, plus: String)] = [2: ("bottom", "top"), 1: ("front", "back"), 0: ("left", "right")]
         let parts = [2, 1, 0].compactMap { axis -> String? in
             guard let s = signs[axis], let form = forms[axis] else { return nil }
             return s < 0 ? form.minus : form.plus

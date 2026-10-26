@@ -20,53 +20,53 @@ struct DDDApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Новый проект") { model.newProject() }
+                Button("New Project") { model.newProject() }
                     .keyboardShortcut("n")
-                Button("Открыть…") { model.openProject() }
+                Button("Open…") { model.openProject() }
                     .keyboardShortcut("o")
             }
             CommandGroup(replacing: .saveItem) {
-                Button("Сохранить") { model.saveProject() }
+                Button("Save") { model.saveProject() }
                     .keyboardShortcut("s")
-                Button("Сохранить как…") { model.saveProjectAs() }
+                Button("Save As…") { model.saveProjectAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                 Divider()
-                Button("Экспорт STL…") { model.exportSTL() }
+                Button("Export STL…") { model.exportSTL() }
                     .keyboardShortcut("e")
             }
             CommandGroup(replacing: .undoRedo) {
-                Button("Отменить") { model.undo() }
+                Button("Undo") { model.undo() }
                     .keyboardShortcut("z")
                     .disabled(!model.canUndo)
-                Button("Повторить") { model.redo() }
+                Button("Redo") { model.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                     .disabled(!model.canRedo)
             }
-            CommandMenu("Объект") {
-                Button("Параллелепипед") { model.add(.box) }
+            CommandMenu("Object") {
+                Button("Box") { model.add(.box) }
                     .keyboardShortcut("1", modifiers: [.command, .option])
-                Button("Сфера") { model.add(.sphere) }
+                Button("Sphere") { model.add(.sphere) }
                     .keyboardShortcut("2", modifiers: [.command, .option])
-                Button("Цилиндр") { model.add(.cylinder) }
+                Button("Cylinder") { model.add(.cylinder) }
                     .keyboardShortcut("3", modifiers: [.command, .option])
                 Divider()
-                Button("Сгруппировать") { model.groupSelection() }
+                Button("Group") { model.groupSelection() }
                     .keyboardShortcut("g")
-                Button("Разгруппировать") { model.ungroupSelection() }
+                Button("Ungroup") { model.ungroupSelection() }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
-                Button("Тело / отверстие") { model.toggleHole() }
+                Button("Solid / Hole") { model.toggleHole() }
                     .keyboardShortcut("h", modifiers: [.command, .option])
-                Menu("Скругление") {
+                Menu("Fillet") {
                     RoundingMenuItems(model: model)
                 }
                 .disabled(model.roundableIDs.isEmpty)
                 Divider()
-                Button("Дублировать") { model.duplicateSelection() }
+                Button("Duplicate") { model.duplicateSelection() }
                     .keyboardShortcut("d")
                 // Без сочетания в меню: ⌘⌫ нужен текстовым полям. Удаление — ⌫ во вьюпорте.
-                Button("Удалить") { model.deleteSelection() }
+                Button("Delete") { model.deleteSelection() }
                 Divider()
-                Button("Показать выделенное") { model.frameSelection() }
+                Button("Frame Selection") { model.frameSelection() }
                     .keyboardShortcut("f", modifiers: [.command, .option])
             }
         }

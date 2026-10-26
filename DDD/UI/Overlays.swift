@@ -14,10 +14,10 @@ struct ViewPresetsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            preset("ИЗО", .iso, "Изометрия — 1")
-            preset("ВЕРХ", .top, "Сверху — 2")
-            preset("ПЕРЕД", .front, "Спереди — 3")
-            preset("БОК", .right, "Справа — 4")
+            preset("ISO", .iso, "Isometric — 1")
+            preset("TOP", .top, "Top — 2")
+            preset("FRONT", .front, "Front — 3")
+            preset("SIDE", .right, "Right — 4")
             Rectangle()
                 .fill(Theme.hairline)
                 .frame(width: 1, height: 16)
@@ -31,7 +31,7 @@ struct ViewPresetsView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(HoverButtonStyle())
-            .help("Показать выделенное — F")
+            .help("Frame selection — F")
         }
         .font(Theme.mono(10, .medium))
         .foregroundStyle(Theme.secondary)
@@ -65,11 +65,11 @@ struct StatusView: View {
             if model.isComputing {
                 ProgressView()
                     .controlSize(.mini)
-                Text("пересчёт")
+                Text("computing")
             } else if model.output.isDraft {
-                Text("черновик")
+                Text("draft")
             }
-            Text("\(model.partTriangles) треуг. · \(Int(model.output.milliseconds.rounded())) мс")
+            Text("\(model.partTriangles) tris · \(Int(model.output.milliseconds.rounded())) ms")
         }
         .font(Theme.mono(10))
         .foregroundStyle(Theme.tertiary)
@@ -92,7 +92,7 @@ struct ToastView: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(2)
             if toast.canUndo {
-                Button("Отменить") {
+                Button("Undo") {
                     model.undo()
                     model.toast = nil
                 }

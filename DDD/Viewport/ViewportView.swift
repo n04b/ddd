@@ -64,7 +64,7 @@ final class ViewportNSView: MTKView {
     }
 
     required init(coder: NSCoder) {
-        fatalError("init(coder:) не используется")
+        fatalError("init(coder:) is not used")
     }
 
     override var isOpaque: Bool { false }

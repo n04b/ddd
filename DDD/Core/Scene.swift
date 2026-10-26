@@ -14,10 +14,10 @@ nonisolated enum NodeKind: String, Codable, Hashable, Sendable {
 
     var baseName: String {
         switch self {
-        case .box: return "Блок"
-        case .sphere: return "Сфера"
-        case .cylinder: return "Цилиндр"
-        case .group: return "Группа"
+        case .box: return "Box"
+        case .sphere: return "Sphere"
+        case .cylinder: return "Cylinder"
+        case .group: return "Group"
         }
     }
 }
@@ -227,25 +227,25 @@ nonisolated struct SceneDocument: Codable, Hashable, Sendable {
     // MARK: Пример
 
     static func demo() -> SceneDocument {
-        var body = Node(name: "Блок 1", kind: .box)
+        var body = Node(name: "Box 1", kind: .box)
         body.size = Vec3(60, 40, 20)
         body.position = Vec3(0, 0, 10)
 
-        var bore = Node(name: "Цилиндр 1", kind: .cylinder)
+        var bore = Node(name: "Cylinder 1", kind: .cylinder)
         bore.mode = .hole
         bore.size = Vec3(16, 16, 30)
         bore.position = Vec3(0, 0, 12)
 
-        var cross = Node(name: "Цилиндр 2", kind: .cylinder)
+        var cross = Node(name: "Cylinder 2", kind: .cylinder)
         cross.mode = .hole
         cross.size = Vec3(8, 8, 70)
         cross.position = Vec3(0, 0, 10)
         cross.rotation = Vec3(0, 90, 0)
 
-        var housing = Node(name: "Корпус", kind: .group)
+        var housing = Node(name: "Housing", kind: .group)
         housing.children = [body, bore, cross]
 
-        var ball = Node(name: "Сфера 1", kind: .sphere)
+        var ball = Node(name: "Sphere 1", kind: .sphere)
         ball.size = Vec3(24, 24, 24)
         ball.position = Vec3(58, 0, 12)
 
