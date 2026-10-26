@@ -56,8 +56,8 @@ struct DDDApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("Solid / Hole") { model.toggleHole() }
                     .keyboardShortcut("h", modifiers: [.command, .option])
-                Menu("Fillet") {
-                    RoundingMenuItems(model: model)
+                Menu("Fillets") {
+                    FilletPresetItems(model: model)
                 }
                 .disabled(model.roundableIDs.isEmpty)
                 Divider()

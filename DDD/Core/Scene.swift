@@ -52,7 +52,7 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
         case .box:
             let dims = "\(Fmt.number(size.x))×\(Fmt.number(size.y))×\(Fmt.number(size.z))"
             guard let r = rounding?.radius else { return dims }
-            return dims + " R\(Fmt.number(r))"
+            return dims + " · R\(Fmt.number(r))"
         case .sphere: return "Ø\(Fmt.number(size.x))"
         case .cylinder: return "Ø\(Fmt.number(size.x))×\(Fmt.number(size.z))"
         case .group: return "\(children.count)"

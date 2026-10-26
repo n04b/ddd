@@ -16,6 +16,22 @@ enum ViewPreset {
     case right
 }
 
+/// Ручка в режиме скруглений: ребро или вершина параллелепипеда.
+enum FilletElement: Hashable {
+    case edge(Int)
+    case vertex(Int)
+}
+
+enum FilletPreset {
+    case allEdges
+    case topAndVertical
+    case vertical
+    case top
+    /// Верх и вертикальные скруглены, низ — фаска 45°: печатается без поддержек.
+    case print
+    case reset
+}
+
 struct Toast: Equatable {
     let id = UUID()
     let text: String
@@ -178,6 +194,7 @@ final class EditorModel {
 
     func select(_ id: UUID?) {
         selection = id.map { [$0] } ?? []
+        dropStaleFilletMode()
         if let id {
             for ancestor in doc.ancestors(of: id) { expanded.insert(ancestor) }
         }
@@ -190,7 +207,16 @@ final class EditorModel {
         } else {
             selection.append(id)
         }
+        dropStaleFilletMode()
         requestRedraw()
+    }
+
+    /// Выделили другое — режим скруглений закрывается, а не ждёт возврата к блоку.
+    private func dropStaleFilletMode() {
+        if let target = filletTarget, selection != [target] {
+            filletTarget = nil
+            filletSelection = []
+        }
     }
 
     func toggleExpanded(_ id: UUID) {
@@ -434,94 +460,269 @@ final class EditorModel {
         }
     }
 
-    // MARK: Скругление
+    // MARK: Скругления
 
-    /// Радиус для блоков, которые ещё не скруглены.
+    /// Размер, с которым пресеты скругляют ещё острый блок.
     var roundingRadius: Double = 2
+    /// Блок в режиме скруглений: полупрозрачный, с ручками на рёбрах и вершинах.
+    private(set) var filletTarget: UUID?
+    /// Выбранные ручки; последняя — активная, у неё плашка значения.
+    private(set) var filletSelection: [FilletElement] = []
+    @ObservationIgnored private var filletDragStart: (rounding: BoxRounding, values: [FilletElement: Double])?
 
-    /// Выделенные блоки: команды скругления применяются ко всем сразу.
+    /// Выделенные блоки: пресеты применяются ко всем сразу.
     var roundableIDs: [UUID] {
         selection.filter { doc.node($0)?.kind == .box }
-    }
-
-    /// По нему меню показывает галочки.
-    private var roundingTarget: Node? {
-        roundableIDs.last.flatMap { doc.node($0) }
-    }
-
-    func roundingRadius(of node: Node) -> Double {
-        node.rounding?.radius ?? roundingRadius
-    }
-
-    func isEdgeRounded(_ e: Int) -> Bool {
-        (roundingTarget?.rounding?.edges[e] ?? 0) > 0
-    }
-
-    func isVertexRounded(_ v: Int) -> Bool {
-        (roundingTarget?.rounding?.vertices[v] ?? 0) > 0
     }
 
     var hasRounding: Bool {
         roundableIDs.contains { doc.node($0)?.rounding != nil }
     }
 
-    /// Меняет радиус всех скруглённых рёбер и вершин блока.
-    func setRoundingRadius(_ id: UUID, _ value: Double) {
-        let r = max(value, 0.1)
-        roundingRadius = r
-        mutate(coalesce: "rounding-\(id)") { document in
+    /// Режим скруглений жив, пока выделен ровно этот блок.
+    var activeFilletNode: Node? {
+        guard let id = filletTarget, selection == [id], let node = doc.node(id), node.kind == .box else { return nil }
+        return node
+    }
+
+    /// Деталь, которую показываем рентгеном: сам блок или его группа верхнего уровня.
+    var filletXrayPart: UUID? {
+        guard let node = activeFilletNode else { return nil }
+        return doc.ancestors(of: node.id).first ?? node.id
+    }
+
+    func enterFilletMode(_ id: UUID) {
+        guard doc.node(id)?.kind == .box else { return }
+        select(id)
+        filletTarget = id
+        filletSelection = []
+        requestRedraw()
+    }
+
+    func exitFilletMode() {
+        guard filletTarget != nil else { return }
+        filletTarget = nil
+        filletSelection = []
+        breakCoalescing()
+        requestRedraw()
+    }
+
+    /// Выбор ручек: ⇧ добавляет или снимает, иначе выбор заменяется.
+    func selectFillet(_ elements: [FilletElement], extend: Bool) {
+        guard activeFilletNode != nil else { return }
+        if extend {
+            if elements.count == 1, let index = filletSelection.firstIndex(of: elements[0]) {
+                filletSelection.remove(at: index)
+            } else {
+                filletSelection.removeAll { elements.contains($0) }
+                filletSelection.append(contentsOf: elements)
+            }
+        } else {
+            filletSelection = elements
+        }
+        requestRedraw()
+    }
+
+    /// Текущее значение элемента: размер ребра, срез вершины или радиус угла «авто».
+    static func filletValue(_ element: FilletElement, _ rounding: BoxRounding) -> Double {
+        switch element {
+        case .edge(let e):
+            return rounding.edges[e]
+        case .vertex(let v):
+            if rounding.cuts[v] > 0 { return rounding.cuts[v] }
+            return BoxRounding.vertexEdges(v).map { rounding.chamfers[$0] ? 0 : rounding.edges[$0] }.min() ?? 0
+        }
+    }
+
+    /// Рёбра, которые меняет выборка: выбранные рёбра и рёбра вершин «авто».
+    private static func affectedEdges(_ elements: [FilletElement], _ rounding: BoxRounding) -> Set<Int> {
+        var result = Set<Int>()
+        for element in elements {
+            switch element {
+            case .edge(let e): result.insert(e)
+            case .vertex(let v) where rounding.cuts[v] <= 0: result.formUnion(BoxRounding.vertexEdges(v))
+            default: break
+            }
+        }
+        return result
+    }
+
+    /// Предел элемента, в который упирается ручка.
+    func filletLimit(_ element: FilletElement, node: Node, growing: [FilletElement]? = nil) -> Double {
+        let rounding = node.rounding ?? BoxRounding()
+        let growingEdges = EditorModel.affectedEdges(growing ?? filletSelection, rounding)
+        switch element {
+        case .edge(let e):
+            return rounding.maxEdge(e, size: node.size, growing: growingEdges)
+        case .vertex(let v):
+            if rounding.cuts[v] > 0 { return BoxRounding.maxCut(size: node.size) }
+            return BoxRounding.vertexEdges(v).map { rounding.maxEdge($0, size: node.size, growing: growingEdges) }.min() ?? 0
+        }
+    }
+
+    func beginFilletDrag() {
+        guard let node = activeFilletNode else { return }
+        let rounding = node.rounding ?? BoxRounding()
+        var values: [FilletElement: Double] = [:]
+        for element in filletSelection {
+            values[element] = EditorModel.filletValue(element, rounding)
+        }
+        filletDragStart = (rounding, values)
+    }
+
+    /// Перетаскивание добавляет одинаковую дельту каждому выбранному и сохраняет
+    /// разницу между ними; ручка упирается в предел.
+    func updateFilletDrag(delta: Double, step: Double) {
+        guard let node = activeFilletNode, let start = filletDragStart else { return }
+        let id = node.id
+        var startNode = node
+        startNode.rounding = start.rounding
+        var targets: [FilletElement: Double] = [:]
+        for (element, value) in start.values {
+            let limit = filletLimit(element, node: startNode, growing: Array(start.values.keys))
+            let raw = ((value + delta) / step).rounded() * step
+            targets[element] = min(max(raw, 0), max(limit, value))
+        }
+        mutate(coalesce: "fillet-\(id)") { document in
             document.update(id) { node in
-                guard var rounding = node.rounding else { return }
-                rounding.edges = rounding.edges.map { $0 > 0 ? r : 0 }
-                rounding.vertices = rounding.vertices.map { $0 > 0 ? r : 0 }
-                node.rounding = rounding
+                var rounding = start.rounding
+                EditorModel.apply(targets, to: &rounding)
+                node.rounding = rounding.isEmpty ? nil : rounding
             }
         }
     }
 
-    func roundAll(vertices: Bool) {
-        updateRounding { rounding, r in
-            rounding.edges = Array(repeating: r, count: 12)
-            rounding.vertices = Array(repeating: vertices ? r : 0, count: 8)
-        }
+    func endFilletDrag() {
+        filletDragStart = nil
+        breakCoalescing()
     }
 
-    /// Снятое ребро снимает и сферы на его концах: вершина держится на своих рёбрах.
-    func setEdge(_ e: Int, _ on: Bool) {
-        updateRounding { rounding, r in
-            rounding.edges[e] = on ? r : 0
-            if !on {
-                let (a, b) = BoxRounding.edgeVertices(e)
-                rounding.vertices[a] = 0
-                rounding.vertices[b] = 0
+    /// Ввод числа: всем выбранным одно значение. Сверх предела не обрезается —
+    /// геометрия строится с допустимым, а поле показывает «12 → 8».
+    func setFilletValue(_ value: Double) {
+        guard let node = activeFilletNode, !filletSelection.isEmpty else { return }
+        let v = max(value, 0)
+        var targets: [FilletElement: Double] = [:]
+        for element in filletSelection { targets[element] = v }
+        updateFillet(node.id) { EditorModel.apply(targets, to: &$0) }
+    }
+
+    func nudgeFilletValue(_ delta: Double) {
+        guard activeFilletNode != nil, !filletSelection.isEmpty else { return }
+        beginFilletDrag()
+        updateFilletDrag(delta: delta, step: abs(delta))
+        endFilletDrag()
+    }
+
+    private static func apply(_ targets: [FilletElement: Double], to rounding: inout BoxRounding) {
+        for (element, value) in targets {
+            switch element {
+            case .edge(let e):
+                rounding.edges[e] = value
+            case .vertex(let v):
+                if rounding.cuts[v] > 0 {
+                    rounding.cuts[v] = value
+                } else {
+                    // Угол «авто» задаётся радиусом трёх своих рёбер.
+                    for e in BoxRounding.vertexEdges(v) {
+                        rounding.edges[e] = value
+                        rounding.chamfers[e] = false
+                    }
+                }
             }
         }
     }
 
-    /// Скруглённая вершина скругляет и три своих ребра.
-    func setVertex(_ v: Int, _ on: Bool) {
-        updateRounding { rounding, r in
-            rounding.vertices[v] = on ? r : 0
-            if on {
-                for e in BoxRounding.vertexEdges(v) { rounding.edges[e] = r }
+    /// Тип выбранных рёбер: скругление или фаска 45°.
+    func setFilletChamfer(_ chamfer: Bool) {
+        guard let node = activeFilletNode else { return }
+        let fallback = node.rounding?.radius ?? roundingRadius
+        let edges = filletSelection.compactMap { if case .edge(let e) = $0 { return e } else { return nil } }
+        updateFillet(node.id) { rounding in
+            for e in edges {
+                rounding.chamfers[e] = chamfer
+                if rounding.edges[e] <= 0 { rounding.edges[e] = fallback }
+            }
+        }
+    }
+
+    /// Тип выбранных вершин: «авто» или срез.
+    func setCornerCut(_ cut: Bool) {
+        guard let node = activeFilletNode else { return }
+        let vertices = filletSelection.compactMap { if case .vertex(let v) = $0 { return v } else { return nil } }
+        updateFillet(node.id) { rounding in
+            for v in vertices {
+                rounding.cuts[v] = cut ? max(rounding.cuts[v], 1) : 0
+            }
+        }
+    }
+
+    /// Нижние рёбра по мировой оси Z с учётом поворота детали: лежат на самом низу блока.
+    func bottomEdges(of node: Node) -> [Int] {
+        let pose = doc.worldPose(of: node.id)
+        let h = node.size * 0.5
+        var lowest = Double.infinity
+        var ends: [(Double, Double)] = []
+        for e in 0..<12 {
+            let l = BoxRounding.edgeLayout(e)
+            var a = Vec3.zero
+            a[l.b] = l.sb * h[l.b]
+            a[l.c] = l.sc * h[l.c]
+            var b = a
+            a[l.axis] = -h[l.axis]
+            b[l.axis] = h[l.axis]
+            let za = pose.apply(a).z
+            let zb = pose.apply(b).z
+            ends.append((za, zb))
+            lowest = min(lowest, za, zb)
+        }
+        return (0..<12).filter { abs(ends[$0].0 - lowest) < 0.01 && abs(ends[$0].1 - lowest) < 0.01 }
+    }
+
+    /// Совет для печати: скругление больше 1 мм у стола заменить фаской 45°.
+    func replaceBottomWithChamfer() {
+        guard let node = activeFilletNode, let rounding = node.rounding else { return }
+        let bottom = bottomEdges(of: node).filter { !rounding.chamfers[$0] && rounding.edges[$0] > 1 }
+        updateFillet(node.id) { rounding in
+            for e in bottom { rounding.chamfers[e] = true }
+        }
+        showToast("Bottom edges: 45° chamfer", undo: true)
+    }
+
+    func applyFilletPreset(_ preset: FilletPreset) {
+        for id in roundableIDs {
+            let r = doc.node(id)?.rounding?.radius ?? roundingRadius
+            updateFillet(id) { rounding in
+                rounding = BoxRounding()
+                let round: [Int]
+                switch preset {
+                case .allEdges: round = Array(0..<12)
+                case .topAndVertical, .print: round = BoxRounding.topEdges + BoxRounding.verticalEdges
+                case .vertical: round = BoxRounding.verticalEdges
+                case .top: round = BoxRounding.topEdges
+                case .reset: round = []
+                }
+                for e in round { rounding.edges[e] = r }
+                if preset == .print {
+                    for e in BoxRounding.bottomEdges {
+                        rounding.edges[e] = r
+                        rounding.chamfers[e] = true
+                    }
+                }
             }
         }
     }
 
     func clearRounding() {
-        updateRounding { rounding, _ in rounding = BoxRounding() }
+        applyFilletPreset(.reset)
     }
 
-    private func updateRounding(_ body: (inout BoxRounding, Double) -> Void) {
-        let ids = roundableIDs
-        let fallback = roundingRadius
+    private func updateFillet(_ id: UUID, _ body: (inout BoxRounding) -> Void) {
         mutate { document in
-            for id in ids {
-                document.update(id) { node in
-                    var rounding = node.rounding ?? BoxRounding()
-                    body(&rounding, rounding.radius ?? fallback)
-                    node.rounding = rounding.isEmpty ? nil : rounding
-                }
+            document.update(id) { node in
+                var rounding = node.rounding ?? BoxRounding()
+                body(&rounding)
+                node.rounding = rounding.isEmpty ? nil : rounding
             }
         }
     }

@@ -8,6 +8,10 @@
 //         правая кнопка — вращать, средняя — панорама, колесо — масштаб.
 //  Трекпад: два пальца — вращать, ⇧ + два пальца — панорама, щипок — масштаб.
 //
+//  Режим скруглений (двойной клик по выделенному блоку): клик по ручке — выбрать,
+//  ⇧ — добавить, двойной клик — параллельные рёбра, ⌥ — все рёбра или вершины,
+//  клик по грани — её 4 ребра, тянуть ручку внутрь — значение. Esc — выход.
+//
 
 import SwiftUI
 import MetalKit
@@ -25,7 +29,10 @@ struct ViewportView: NSViewRepresentable {
         // Чтение подписывает представление на изменения выделения и результата ядра.
         _ = model.selection
         _ = model.output.generation
+        _ = model.filletTarget
+        _ = model.filletSelection
         view.needsDisplay = true
+        view.overlay.needsDisplay = true
     }
 }
 
@@ -36,6 +43,7 @@ final class ViewportNSView: MTKView {
         case pan
         case deselectOrOrbit
         case move(anchor: Vec3, vertical: Bool)
+        case fillet(origin: NSPoint, inward: CGVector, element: FilletElement)
     }
 
     private let model: EditorModel
@@ -43,6 +51,10 @@ final class ViewportNSView: MTKView {
     private var dragMode: DragMode = .none
     private var mouseDownPoint: NSPoint = .zero
     private var dragged = false
+    let overlay = FilletOverlayView()
+    private var valueField: NSTextField?
+    /// Повторный клик в ту же точку перебирает наложившиеся ручки.
+    private var lastHandleClick: (point: NSPoint, index: Int)?
 
     init(model: EditorModel) {
         self.model = model
@@ -58,8 +70,13 @@ final class ViewportNSView: MTKView {
         layer?.isOpaque = false
         renderer = Renderer(view: self, model: model)
         delegate = renderer
+        overlay.model = model
+        overlay.frame = bounds
+        overlay.autoresizingMask = [.width, .height]
+        addSubview(overlay)
         model.redrawHandler = { [weak self] in
             self?.needsDisplay = true
+            self?.overlay.needsDisplay = true
         }
     }
 
@@ -79,6 +96,30 @@ final class ViewportNSView: MTKView {
 
     // MARK: Мышь
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard model.activeFilletNode != nil else {
+            if overlay.hovered != nil { overlay.hovered = nil; overlay.needsDisplay = true }
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        overlay.cursor = point
+        overlay.hovered = FilletScene.build(model, size: bounds.size)?.handles(at: point).first?.element
+        overlay.needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        overlay.hovered = nil
+        overlay.cursor = nil
+        overlay.needsDisplay = true
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
@@ -86,11 +127,21 @@ final class ViewportNSView: MTKView {
         dragged = false
         let flags = event.modifierFlags
 
+        if model.activeFilletNode != nil, filletMouseDown(event, at: point) {
+            return
+        }
+
         guard let hit = model.pick(worldRay(point)) else {
             dragMode = flags.contains(.shift) ? .pan : .deselectOrOrbit
             return
         }
         let target = model.selectionTarget(for: hit.path, deep: event.clickCount >= 2)
+        // Двойной клик по уже выделенному блоку — режим скруглений.
+        if event.clickCount >= 2, model.selection == [target], model.doc.node(target)?.kind == .box {
+            model.enterFilletMode(target)
+            dragMode = .none
+            return
+        }
         if flags.contains(.command) {
             model.toggleSelection(target)
             dragMode = .none
@@ -115,6 +166,15 @@ final class ViewportNSView: MTKView {
             if let delta = moveDelta(to: point, anchor: anchor, vertical: vertical) {
                 model.updateMove(worldDelta: delta, snap: !event.modifierFlags.contains(.option))
             }
+        case let .fillet(origin, inward, element):
+            if overlay.dragging == nil {
+                overlay.dragging = element
+                model.beginFilletDrag()
+            }
+            // Смещение мыши вдоль направления «внутрь», в миллиметрах значения.
+            let length2 = inward.dx * inward.dx + inward.dy * inward.dy
+            let delta = ((point.x - origin.x) * inward.dx + (point.y - origin.y) * inward.dy) / max(length2, 1e-6)
+            model.updateFilletDrag(delta: Double(delta), step: event.modifierFlags.contains(.shift) ? 1 : 0.5)
         case .orbit, .deselectOrOrbit:
             dragMode = .orbit
             model.camera.orbit(dx: Float(event.deltaX), dy: Float(event.deltaY))
@@ -131,8 +191,20 @@ final class ViewportNSView: MTKView {
         switch dragMode {
         case .move:
             model.endMove()
+        case .fillet:
+            if overlay.dragging != nil {
+                overlay.dragging = nil
+                model.endFilletDrag()
+            }
         case .deselectOrOrbit:
-            if !dragged { model.select(nil) }
+            // Клик по пустому месту в режиме скруглений — выход из режима, блок остаётся выделен.
+            if !dragged {
+                if model.activeFilletNode != nil {
+                    model.exitFilletMode()
+                } else {
+                    model.select(nil)
+                }
+            }
         default:
             break
         }
@@ -184,6 +256,10 @@ final class ViewportNSView: MTKView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let step: Double = flags.contains(.shift) ? 10 : (flags.contains(.option) ? 0.1 : 1)
 
+        if model.activeFilletNode != nil, filletKeyDown(event, flags: flags) {
+            return
+        }
+
         // Cmd + ↑/↓ — по вертикали (ось Z).
         if flags.contains(.command) {
             switch event.keyCode {
@@ -226,6 +302,191 @@ final class ViewportNSView: MTKView {
         }
     }
 
+    // MARK: Режим скруглений
+
+    /// true — клик разобран режимом скруглений.
+    private func filletMouseDown(_ event: NSEvent, at point: NSPoint) -> Bool {
+        guard let node = model.activeFilletNode, let scene = FilletScene.build(model, size: bounds.size) else { return false }
+        let flags = event.modifierFlags
+        finishValueEntry(commit: true)
+
+        switch overlay.badgePart(at: point) {
+        case .value:
+            beginValueEntry(initial: nil)
+            return true
+        case .menu:
+            showKindMenu(at: point)
+            return true
+        case .hint:
+            model.replaceBottomWithChamfer()
+            return true
+        case nil:
+            break
+        }
+
+        let candidates = scene.handles(at: point)
+        if !candidates.isEmpty {
+            var index = 0
+            if let last = lastHandleClick, hypot(last.point.x - point.x, last.point.y - point.y) < 4,
+               candidates.count > 1, event.clickCount == 1 {
+                index = (last.index + 1) % candidates.count
+            }
+            lastHandleClick = (point, index)
+            let handle = candidates[index]
+            let element = handle.element
+            if flags.contains(.option) {
+                // ⌥ — все рёбра или все вершины; нажатая ручка остаётся активной.
+                let all: [FilletElement]
+                switch element {
+                case .edge: all = (0..<12).map { .edge($0) }
+                case .vertex: all = (0..<8).map { .vertex($0) }
+                }
+                model.selectFillet(all.filter { $0 != element } + [element], extend: false)
+            } else if event.clickCount >= 2, case .edge(let e) = element {
+                model.selectFillet(BoxRounding.parallelEdges(e).filter { $0 != e }.map { .edge($0) } + [element], extend: false)
+            } else if flags.contains(.shift) {
+                model.selectFillet([element], extend: true)
+            } else if !model.filletSelection.contains(element) {
+                model.selectFillet([element], extend: false)
+            } else {
+                // Уже выбрана: делаем активной, выбор не теряем — так тянут группу.
+                model.selectFillet(model.filletSelection.filter { $0 != element } + [element], extend: false)
+            }
+            if model.filletSelection.contains(element) {
+                dragMode = .fillet(origin: point, inward: handle.inward, element: element)
+            } else {
+                dragMode = .none
+            }
+            return true
+        }
+        lastHandleClick = nil
+
+        // Клик по грани блока — её 4 ребра; нижняя грань видна сквозь тело.
+        if let hit = model.pick(worldRay(point)), hit.path.last == node.id {
+            let local = model.doc.worldPose(of: node.id).inverse.apply(hit.point)
+            let h = node.size * 0.5
+            var axis = 0
+            for a in 1..<3 where abs(local[a]) / max(h[a], 1e-9) > abs(local[axis]) / max(h[axis], 1e-9) {
+                axis = a
+            }
+            let edges = BoxRounding.faceEdges(axis: axis, sign: local[axis] >= 0 ? 1 : -1).map { FilletElement.edge($0) }
+            model.selectFillet(edges, extend: flags.contains(.shift))
+            dragMode = .orbit
+            return true
+        }
+        if model.pick(worldRay(point)) != nil {
+            // Другой объект: выходим из режима, клик дальше выделяет его как обычно.
+            model.exitFilletMode()
+            return false
+        }
+        dragMode = flags.contains(.shift) ? .pan : .deselectOrOrbit
+        return true
+    }
+
+    /// ⌘A из меню Edit: в режиме скруглений — все 12 рёбер.
+    override func selectAll(_ sender: Any?) {
+        guard model.activeFilletNode != nil else { return }
+        model.selectFillet((0..<12).map { .edge($0) }, extend: false)
+    }
+
+    /// true — клавиша разобрана режимом скруглений.
+    private func filletKeyDown(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+        let hasSelection = !model.filletSelection.isEmpty
+        switch event.keyCode {
+        case 53:
+            model.exitFilletMode()
+            return true
+        case 0 where flags.contains(.command):
+            model.selectFillet((0..<12).map { .edge($0) }, extend: false)
+            return true
+        case 51, 117:
+            // ⌫ возвращает выбранным острое ребро и не удаляет сам блок.
+            if hasSelection { model.setFilletValue(0) }
+            return true
+        case 126, 125:
+            let delta: Double = (flags.contains(.shift) ? 1 : 0.5) * (event.keyCode == 126 ? 1 : -1)
+            model.nudgeFilletValue(delta)
+            return true
+        case 123, 124:
+            return true
+        default:
+            break
+        }
+        if hasSelection, !flags.contains(.command), !flags.contains(.control),
+           let characters = event.characters, let first = characters.first,
+           first.isNumber || first == "." || first == "," {
+            beginValueEntry(initial: characters)
+            return true
+        }
+        return false
+    }
+
+    /// Поле ввода прямо на плашке: Enter — применить, Esc — отменить.
+    private func beginValueEntry(initial: String?) {
+        guard model.activeFilletNode != nil, !model.filletSelection.isEmpty else { return }
+        overlay.display()
+        var rect = overlay.valueRect
+        if rect.isNull { rect = CGRect(x: bounds.midX - 50, y: bounds.midY, width: 100, height: 20) }
+        let field = NSTextField(frame: rect.insetBy(dx: 4, dy: 0))
+        field.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        field.textColor = .white
+        field.backgroundColor = NSColor(white: 0.16, alpha: 1)
+        field.drawsBackground = true
+        field.isBordered = false
+        field.focusRingType = .none
+        field.delegate = self
+        if let node = model.activeFilletNode, let first = model.filletSelection.last {
+            field.stringValue = initial ?? Fmt.number(EditorModel.filletValue(first, node.rounding ?? BoxRounding()))
+        }
+        addSubview(field)
+        valueField = field
+        window?.makeFirstResponder(field)
+        if initial != nil {
+            field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.count, length: 0)
+        }
+    }
+
+    fileprivate func finishValueEntry(commit: Bool) {
+        guard let field = valueField else { return }
+        valueField = nil
+        if commit, let value = ExpressionEvaluator.evaluate(field.stringValue) {
+            model.setFilletValue(value)
+        }
+        field.removeFromSuperview()
+        window?.makeFirstResponder(self)
+    }
+
+    /// Тип обработки: для рёбер — скругление или фаска, для вершин — авто или срез.
+    private func showKindMenu(at point: NSPoint) {
+        guard let node = model.activeFilletNode else { return }
+        let rounding = node.rounding ?? BoxRounding()
+        let edges = model.filletSelection.compactMap { if case .edge(let e) = $0 { return e } else { return nil } }
+        let vertices = model.filletSelection.compactMap { if case .vertex(let v) = $0 { return v } else { return nil } }
+        let menu = NSMenu()
+        if !edges.isEmpty {
+            menu.addItem(ActionMenuItem("Fillet", on: edges.allSatisfy { !rounding.chamfers[$0] && rounding.edges[$0] > 0 }) { [weak self] in
+                self?.model.setFilletChamfer(false)
+            })
+            menu.addItem(ActionMenuItem("Chamfer 45°", on: edges.allSatisfy { rounding.chamfers[$0] && rounding.edges[$0] > 0 }) { [weak self] in
+                self?.model.setFilletChamfer(true)
+            })
+        }
+        if !vertices.isEmpty {
+            if !edges.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(ActionMenuItem("Auto corner", on: vertices.allSatisfy { rounding.cuts[$0] <= 0 }) { [weak self] in
+                self?.model.setCornerCut(false)
+            })
+            menu.addItem(ActionMenuItem("Corner cut", on: vertices.allSatisfy { rounding.cuts[$0] > 0 }) { [weak self] in
+                self?.model.setCornerCut(true)
+            })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem("Make sharp", on: false) { [weak self] in
+            self?.model.setFilletValue(0)
+        })
+        menu.popUp(positioning: nil, at: point, in: self)
+    }
+
     // MARK: Геометрия экрана
 
     private func worldRay(_ point: NSPoint) -> Ray {
@@ -256,5 +517,43 @@ final class ViewportNSView: MTKView {
         let t = (planePoint - ray.origin).dot(normal) / denom
         guard t > 0 else { return nil }
         return ray.origin + ray.dir * t
+    }
+}
+
+extension ViewportNSView: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            finishValueEntry(commit: false)
+            return true
+        }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            finishValueEntry(commit: true)
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        finishValueEntry(commit: true)
+    }
+}
+
+/// Пункт меню с замыканием вместо селектора.
+private final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, on: Bool, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+        state = on ? .on : .off
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    @objc private func fire() {
+        handler()
     }
 }

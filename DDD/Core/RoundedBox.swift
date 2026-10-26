@@ -1,36 +1,88 @@
 //
 //  RoundedBox.swift
-//  Скругление рёбер и вершин параллелепипеда.
+//  Скругления и фаски рёбер параллелепипеда, срезы его вершин.
 //
-//  Скруглённый блок остаётся выпуклым, поэтому строится не булевыми операциями,
-//  а отсечением блока плоскостями: хордами цилиндра вдоль каждого ребра и гранями
-//  сферы в каждой вершине. Отсечение выпуклого тела плоскостью всегда даёт
-//  замкнутое выпуклое тело — без щелей и вырожденных кусков.
+//  Обработанный блок остаётся выпуклым, поэтому строится не булевыми операциями,
+//  а отсечением блока плоскостями: хордами цилиндра вдоль скруглённого ребра,
+//  одной плоскостью вдоль фаски, гранями сферы в углу и плоскостью среза вершины.
+//  Отсечение выпуклого тела плоскостью всегда даёт замкнутое выпуклое тело —
+//  без щелей и вырожденных кусков.
 //
-//  Вершина без скруглённых рёбер выпуклой быть не может, поэтому скругление
-//  вершины скругляет и три её ребра, а угол становится сферическим. Рёбра без
-//  скругления вершины сходятся пересечением цилиндров, со складками.
+//  Вершина «авто» собирается из трёх своих рёбер: если все три скруглены,
+//  угол — сфера наименьшего из радиусов, при равных радиусах переход гладкий.
 //
 
 import Foundation
 
 nonisolated struct BoxRounding: Codable, Hashable, Sendable {
-    /// Радиусы рёбер, мм: 0–3 вдоль X, 4–7 вдоль Y, 8–11 вдоль Z.
-    /// Внутри оси бит 1 — знак младшей из двух других осей, бит 2 — старшей.
+    /// Размер обработки рёбер, мм: радиус скругления или катет фаски.
+    /// 0–3 вдоль X, 4–7 вдоль Y, 8–11 вдоль Z; внутри оси бит 1 — знак младшей
+    /// из двух других осей, бит 2 — старшей.
     var edges: [Double] = Array(repeating: 0, count: 12)
-    /// Радиусы вершин, мм. Индекс — биты знаков: X = 1, Y = 2, Z = 4.
-    var vertices: [Double] = Array(repeating: 0, count: 8)
+    /// Фаска 45° вместо скругления.
+    var chamfers: [Bool] = Array(repeating: false, count: 12)
+    /// Срез вершины, мм; 0 — вершина «авто». Индекс — биты знаков: X = 1, Y = 2, Z = 4.
+    var cuts: [Double] = Array(repeating: 0, count: 8)
 
-    var isEmpty: Bool {
-        edges.allSatisfy { $0 <= 0 } && vertices.allSatisfy { $0 <= 0 }
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case edges, chamfers, cuts
     }
 
-    var roundedEdgeCount: Int { edges.filter { $0 > 0 }.count }
-    var roundedVertexCount: Int { vertices.filter { $0 > 0 }.count }
+    /// Недостающие поля — значения по умолчанию: файл из прошлой версии открывается.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let edges = try c.decodeIfPresent([Double].self, forKey: .edges) ?? []
+        let chamfers = try c.decodeIfPresent([Bool].self, forKey: .chamfers) ?? []
+        let cuts = try c.decodeIfPresent([Double].self, forKey: .cuts) ?? []
+        if edges.count == 12 { self.edges = edges }
+        if chamfers.count == 12 { self.chamfers = chamfers }
+        if cuts.count == 8 { self.cuts = cuts }
+    }
 
-    /// Радиус для поля в инспекторе: первый ненулевой.
+    var isEmpty: Bool {
+        edges.allSatisfy { $0 <= 0 } && cuts.allSatisfy { $0 <= 0 }
+    }
+
+    /// Радиус для строки дерева: первый ненулевой.
     var radius: Double? {
-        (edges + vertices).first { $0 > 0 }
+        edges.first { $0 > 0 }
+    }
+
+    // MARK: Пределы
+
+    /// Размеры, по которым строится геометрия. Два параллельных ребра одной грани
+    /// делят её ширину; если вместе не помещаются, оба уменьшаются пропорционально.
+    /// Заданные значения при этом не меняются.
+    func effectiveEdges(size: Vec3) -> [Double] {
+        (0..<12).map { e in
+            let l = BoxRounding.edgeLayout(e)
+            var r = max(edges[e], 0)
+            r = BoxRounding.share(r, max(edges[e ^ 1], 0), size[l.b])
+            r = BoxRounding.share(r, max(edges[e ^ 2], 0), size[l.c])
+            return r
+        }
+    }
+
+    private static func share(_ r: Double, _ other: Double, _ width: Double) -> Double {
+        guard r + other > width, r + other > 0 else { return r }
+        return width * r / (r + other)
+    }
+
+    /// Наибольший размер ребра: r_max = min(w₁ − r₁′, w₂ − r₂′). Если противоположное
+    /// ребро растёт вместе с этим, грань делится пополам.
+    func maxEdge(_ e: Int, size: Vec3, growing: Set<Int> = []) -> Double {
+        let l = BoxRounding.edgeLayout(e)
+        func limit(_ opposite: Int, _ width: Double) -> Double {
+            growing.contains(opposite) ? width / 2 : width - min(max(edges[opposite], 0), width)
+        }
+        return max(min(limit(e ^ 1, size[l.b]), limit(e ^ 2, size[l.c])), 0)
+    }
+
+    /// Срез вершины не длиннее половины самого короткого ребра.
+    static func maxCut(size: Vec3) -> Double {
+        min(size.x, size.y, size.z) / 2
     }
 
     // MARK: Топология
@@ -69,6 +121,24 @@ nonisolated struct BoxRounding: Codable, Hashable, Sendable {
             return axis * 4 + (v >> b & 1) + 2 * (v >> c & 1)
         }
     }
+
+    /// Четыре ребра грани с нормалью вдоль `axis` и знаком `sign`.
+    static func faceEdges(axis: Int, sign: Double) -> [Int] {
+        (0..<12).filter { e in
+            let l = edgeLayout(e)
+            return (l.b == axis && l.sb == sign) || (l.c == axis && l.sc == sign)
+        }
+    }
+
+    /// Рёбра, параллельные данному: та же ось.
+    static func parallelEdges(_ e: Int) -> [Int] {
+        let axis = e / 4
+        return Array(axis * 4..<axis * 4 + 4)
+    }
+
+    static let topEdges = faceEdges(axis: 2, sign: 1)
+    static let bottomEdges = faceEdges(axis: 2, sign: -1)
+    static let verticalEdges = parallelEdges(8)
 
     // MARK: Названия
 
@@ -129,21 +199,25 @@ nonisolated enum RoundedBox {
 
     static func polygons(size: Vec3, rounding: BoxRounding, draft: Bool = false) -> [CSGPolygon] {
         let h = size * 0.5
-        let minHalf = min(h.x, h.y, h.z)
-
-        let vertexRadius = rounding.vertices.map { min(max($0, 0), minHalf) }
+        let radii = rounding.effectiveEdges(size: size)
         var facets = boxFacets(h)
 
         for e in 0..<12 {
             let l = BoxRounding.edgeLayout(e)
-            let (va, vb) = BoxRounding.edgeVertices(e)
-            let r = min(max(rounding.edges[e], vertexRadius[va], vertexRadius[vb], 0), h[l.b], h[l.c])
+            let r = radii[e]
             guard r > 1e-4 else { continue }
+            if rounding.chamfers[e] {
+                // Фаска 45°: плоскость через точки на r от ребра по обеим граням.
+                var normal = Vec3.zero
+                normal[l.b] = l.sb / 2.0.squareRoot()
+                normal[l.c] = l.sc / 2.0.squareRoot()
+                clip(&facets, by: Cut(normal: normal, w: (h[l.b] + h[l.c] - r) / 2.0.squareRoot(), surface: .flat))
+                continue
+            }
             var center = Vec3.zero
             center[l.b] = l.sb * (h[l.b] - r)
             center[l.c] = l.sc * (h[l.c] - r)
             let n = quarterSegments(r, draft: draft)
-            var cuts: [Cut] = []
             for k in 0..<n {
                 let mid = (Double(k) + 0.5) / Double(n) * Double.pi / 2
                 let half = Double.pi / 4 / Double(n)
@@ -151,17 +225,15 @@ nonisolated enum RoundedBox {
                 normal[l.b] = l.sb * cos(mid)
                 normal[l.c] = l.sc * sin(mid)
                 // Хорда отстоит от оси на r·cos(половины шага).
-                cuts.append(Cut(normal: normal, w: normal.dot(center) + r * cos(half),
-                                surface: .cylinder(center: center, axis: l.axis)))
-            }
-            for cut in cuts {
-                clip(&facets, by: cut)
+                clip(&facets, by: Cut(normal: normal, w: normal.dot(center) + r * cos(half),
+                                      surface: .cylinder(center: center, axis: l.axis)))
             }
         }
 
         for v in 0..<8 {
-            let r = vertexRadius[v]
-            guard r > 1e-4 else { continue }
+            let edges = BoxRounding.vertexEdges(v)
+            guard edges.allSatisfy({ radii[$0] > 1e-4 && !rounding.chamfers[$0] }) else { continue }
+            let r = edges.map { radii[$0] }.min() ?? 0
             let s = BoxRounding.vertexSigns(v)
             let center = Vec3(s.x * (h.x - r), s.y * (h.y - r), s.z * (h.z - r))
             let n = quarterSegments(r, draft: draft)
@@ -200,6 +272,16 @@ nonisolated enum RoundedBox {
                 clip(&local, by: cut)
             }
             facets = rest + local
+        }
+
+        let maxCut = BoxRounding.maxCut(size: size)
+        for v in 0..<8 {
+            let d = min(max(rounding.cuts[v], 0), maxCut)
+            guard d > 1e-4 else { continue }
+            // Срез вершины: плоскость через точки на d от угла по трём рёбрам.
+            let s = BoxRounding.vertexSigns(v)
+            let normal = s / 3.0.squareRoot()
+            clip(&facets, by: Cut(normal: normal, w: (h.x + h.y + h.z - d) / 3.0.squareRoot(), surface: .flat))
         }
 
         return facets.compactMap { facet in

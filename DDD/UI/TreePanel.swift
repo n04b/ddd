@@ -137,6 +137,13 @@ private struct TreeRow: View {
                 .foregroundStyle(Theme.tertiary)
                 .lineLimit(1)
 
+            if node.rounding?.isLimited(size: node.size) == true {
+                Circle()
+                    .fill(Color(red: 1.00, green: 0.83, blue: 0.35))
+                    .frame(width: 5, height: 5)
+                    .help("A fillet doesn't fit the box size and is built smaller")
+            }
+
             if isTopLevelHole {
                 Text("no cut")
                     .font(Theme.label(9.5))
@@ -207,6 +214,11 @@ private struct TreeRow: View {
             Button("Rename") { model.renamingID = node.id }
             Button(node.mode == .hole ? "Make solid" : "Make hole") {
                 model.setMode([node.id], node.mode == .hole ? .solid : .hole)
+            }
+            if node.kind == .box {
+                Menu("Fillets") {
+                    FilletPresetItems(model: model, target: node.id)
+                }
             }
             Divider()
             Button("Group selection") {

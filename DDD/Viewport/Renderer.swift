@@ -28,6 +28,7 @@ enum Palette {
     static let holeXray = SIMD4<Float>(1.00, 0.62, 0.25, 0.07)
     static let selection = SIMD4<Float>(0.30, 0.84, 0.98, 0.30)
     static let selectionXray = SIMD4<Float>(0.30, 0.84, 0.98, 0.10)
+    static let filletXray = SIMD4<Float>(0.68, 0.72, 0.79, 0.30)
     static let gridMinor = SIMD4<Float>(1, 1, 1, 0.05)
     static let gridMajor = SIMD4<Float>(1, 1, 1, 0.10)
     static let plateOutline = SIMD4<Float>(1, 1, 1, 0.24)
@@ -152,8 +153,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // 1. Тела верхнего уровня — это печатаемые детали.
         var parts = Set<UUID>()
+        let xray = model.filletXrayPart
         for node in document.nodes where node.visible && node.mode == .solid {
             parts.insert(node.id)
+            if node.id == xray { continue }
             guard let mesh = meshBuffers[node.id], let matrix = scene.matrices[node.id] else { continue }
             submit(mesh, selected.contains(node.id) ? Palette.solidSelected : Palette.solid,
                    lit: true, depth: depthWrite, model: matrix)
@@ -169,6 +172,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             guard let mesh = meshBuffers[id], let matrix = scene.matrices[id] else { continue }
             submit(mesh, Palette.holeXray, lit: false, depth: depthAlways, model: matrix)
             submit(mesh, Palette.hole, lit: true, depth: depthTest, model: matrix)
+        }
+
+        // 3½. Деталь в режиме скруглений — рентгеном: задние и нижние рёбра видны сквозь тело.
+        if let xray, let mesh = meshBuffers[xray], let matrix = scene.matrices[xray] {
+            submit(mesh, Palette.filletXray, lit: true, depth: depthTest, model: matrix)
         }
 
         // 4. Выделенные объекты внутри групп.

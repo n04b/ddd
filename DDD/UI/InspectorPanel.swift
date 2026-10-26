@@ -173,38 +173,66 @@ private struct NodeInspector: View {
         }
     }
 
+    /// Строка-сводка: вход в режим скруглений и пресеты. Сами правки — ручками на модели.
     private var roundingSection: some View {
         let id = node.id
-        let rounding = node.rounding ?? BoxRounding()
-        return section("FILLET") {
-            HStack(spacing: 6) {
-                NumberField(label: "R", labelColor: Theme.secondary, value: model.roundingRadius(of: node), unit: "mm",
-                            dragStep: 0.1, keyStep: 0.5, minimum: 0.1,
-                            onChange: { model.setRoundingRadius(id, $0) },
-                            onFinish: { model.breakCoalescing() })
+        let editing = model.activeFilletNode?.id == id
+        return section("FILLETS") {
+            Button {
+                if editing { model.exitFilletMode() } else { model.enterFilletMode(id) }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(node.rounding?.summary(size: node.size) ?? "Sharp edges")
+                        .font(Theme.mono(11, .medium))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Text(editing ? "Done" : "Edit")
+                        .font(Theme.label(11.5, .medium))
+                        .foregroundStyle(Theme.cyan)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(editing ? Theme.cyan.opacity(0.14) : Theme.field))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(editing ? Theme.cyan.opacity(0.85) : Theme.hairline, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Edit fillets on the model — or double-click the box")
+
+            HStack(spacing: 10) {
                 Menu {
-                    RoundingMenuItems(model: model)
+                    FilletPresetItems(model: model)
                 } label: {
                     HStack(spacing: 4) {
-                        Text("Round")
-                            .font(Theme.label(11.5, .medium))
+                        Text("Presets")
+                            .font(Theme.label(11, .medium))
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.system(size: 7.5, weight: .bold))
                     }
-                    .foregroundStyle(Theme.cyan)
+                    .foregroundStyle(Theme.secondary)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .padding(.horizontal, 8)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.cyan.opacity(0.14)))
+                Spacer()
+                Button("Reset") { model.clearRounding() }
+                    .buttonStyle(.plain)
+                    .font(Theme.label(11, .medium))
+                    .foregroundStyle(node.rounding == nil ? Theme.tertiary : Theme.secondary)
+                    .disabled(node.rounding == nil)
             }
-            Text(rounding.isEmpty
-                 ? "Sharp edges"
-                 : "Edges: \(rounding.roundedEdgeCount) of 12 · vertices: \(rounding.roundedVertexCount) of 8")
-                .font(Theme.label(10.5))
-                .foregroundStyle(Theme.tertiary)
+
+            if editing {
+                Text("Drag a handle into the body. ⇧-click adds, double-click picks parallel edges, a face click picks its 4 edges, ⌥ — all. Type a number to enter it. Esc — done.")
+                    .font(Theme.label(10.5))
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -276,45 +304,76 @@ private struct NodeInspector: View {
     }
 }
 
-/// Пункты скругления блока: общие для инспектора и меню «Объект».
-struct RoundingMenuItems: View {
+/// Пресеты скруглений: общие для инспектора, меню «Object» и контекстного меню дерева.
+struct FilletPresetItems: View {
     let model: EditorModel
+    /// Узел из контекстного меню: сначала выделяем его, потом применяем.
+    let target: UUID?
 
-    init(model: EditorModel) {
+    init(model: EditorModel, target: UUID? = nil) {
         self.model = model
+        self.target = target
     }
 
     var body: some View {
-        Button("All edges and vertices") { model.roundAll(vertices: true) }
-        Button("All edges, sharp vertices") { model.roundAll(vertices: false) }
-        Divider()
-        Menu("Edges") {
-            edgeSection("Along X", axis: 0)
-            edgeSection("Along Y", axis: 1)
-            edgeSection("Vertical", axis: 2)
-        }
-        Menu("Vertices") {
-            ForEach(0..<8, id: \.self) { v in
-                Toggle(BoxRounding.vertexName(v), isOn: Binding(
-                    get: { model.isVertexRounded(v) },
-                    set: { model.setVertex(v, $0) }
-                ))
-            }
+        Button("Edit Fillets…") {
+            prepare()
+            if let id = model.roundableIDs.last { model.enterFilletMode(id) }
         }
         Divider()
-        Button("Remove fillets") { model.clearRounding() }
-            .disabled(!model.hasRounding)
+        Button("All Edges") { apply(.allEdges) }
+        Button("Top + Vertical") { apply(.topAndVertical) }
+        Button("Vertical") { apply(.vertical) }
+        Button("Top Only") { apply(.top) }
+        Button("For Printing") { apply(.print) }
+        Divider()
+        Button("Reset Fillets") { apply(.reset) }
     }
 
-    private func edgeSection(_ title: String, axis: Int) -> some View {
-        Section(title) {
-            ForEach(axis * 4..<axis * 4 + 4, id: \.self) { e in
-                Toggle(BoxRounding.edgeName(e), isOn: Binding(
-                    get: { model.isEdgeRounded(e) },
-                    set: { model.setEdge(e, $0) }
-                ))
+    private func prepare() {
+        if let target, !model.selection.contains(target) { model.select(target) }
+    }
+
+    private func apply(_ preset: FilletPreset) {
+        prepare()
+        model.applyFilletPreset(preset)
+    }
+}
+
+extension BoxRounding {
+    /// Сводка для инспектора: «All · R 3», «Top R 3 · Bottom ◢ 1», «5 edges, mixed».
+    func summary(size: Vec3) -> String {
+        func mark(_ e: Int) -> String {
+            (chamfers[e] ? "◢ " : "R ") + Fmt.number(edges[e])
+        }
+        func uniform(_ group: [Int]) -> Bool {
+            group.allSatisfy { edges[$0] == edges[group[0]] && chamfers[$0] == chamfers[group[0]] }
+        }
+        var parts: [String] = []
+        if uniform(Array(0..<12)) {
+            if edges[0] > 0 { parts.append("All · " + mark(0)) }
+        } else if uniform(BoxRounding.topEdges), uniform(BoxRounding.bottomEdges), uniform(BoxRounding.verticalEdges) {
+            for (name, group) in [("Top", BoxRounding.topEdges), ("Vertical", BoxRounding.verticalEdges),
+                                  ("Bottom", BoxRounding.bottomEdges)] where edges[group[0]] > 0 {
+                parts.append(name + " " + mark(group[0]))
+            }
+        } else {
+            let processed = (0..<12).filter { edges[$0] > 0 }
+            let label = processed.count == 1 ? "1 edge" : "\(processed.count) edges"
+            if let first = processed.first, uniform(processed) {
+                parts.append(label + " · " + mark(first))
+            } else {
+                parts.append(label + ", mixed")
             }
         }
+        let cutCount = cuts.filter { $0 > 0 }.count
+        if cutCount > 0 { parts.append(cutCount == 1 ? "1 corner cut" : "\(cutCount) corner cuts") }
+        return parts.isEmpty ? "Sharp edges" : parts.joined(separator: " · ")
+    }
+
+    /// Хотя бы одно ребро строится меньше заданного: не помещается в размер.
+    func isLimited(size: Vec3) -> Bool {
+        zip(effectiveEdges(size: size), edges).contains { $0 < $1 - 1e-6 }
     }
 }
 
