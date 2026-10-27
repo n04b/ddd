@@ -65,10 +65,9 @@ struct ToolbarView: View {
                     Text("STL")
                         .font(Theme.mono(11, .semibold))
                 }
-                .foregroundStyle(Color.black.opacity(0.85))
                 .padding(.horizontal, 12)
                 .frame(height: 28)
-                .background(Capsule().fill(Theme.cyan))
+                .background(Capsule().fill(Color.black.opacity(0.15)))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -77,7 +76,7 @@ struct ToolbarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .glass(radius: 22)
+        // .glass(radius: 22)
     }
 
     private var divider: some View {
