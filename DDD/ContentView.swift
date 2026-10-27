@@ -42,6 +42,8 @@ struct ContentView: View {
                 Spacer(minLength: 16)
                 if !model.selection.isEmpty {
                     InspectorPanel(model: model)
+                        // Под кубом навигации.
+                        .padding(.top, ViewCubeView.size - 32)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -54,8 +56,8 @@ struct ContentView: View {
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            ViewPresetsView(model: model)
-                .padding(.top, 10)
+            ViewCubeView(model: model)
+                .padding(.top, 12)
                 .padding(.trailing, 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 

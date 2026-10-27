@@ -6,7 +6,7 @@
 import Foundation
 import simd
 
-struct OrbitCamera {
+struct OrbitCamera: Equatable {
     var target = SIMD3<Float>(0, 0, 10)
     var distance: Float = 240
     var yaw: Float = -Float.pi / 4

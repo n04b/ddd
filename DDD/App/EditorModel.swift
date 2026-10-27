@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import simd
 import Observation
 import AppKit
 import UniformTypeIdentifiers
@@ -53,6 +54,9 @@ final class EditorModel {
     private(set) var undoStack: [SceneDocument] = []
     private(set) var redoStack: [SceneDocument] = []
 
+    /// Азимут и наклон камеры для куба навигации; обновляются при каждой перерисовке.
+    private(set) var viewAngles = SIMD2<Float>(OrbitCamera().yaw, OrbitCamera().pitch)
+
     @ObservationIgnored var camera = OrbitCamera()
     @ObservationIgnored var redrawHandler: (() -> Void)?
     @ObservationIgnored private var worker: KernelWorker?
@@ -65,6 +69,7 @@ final class EditorModel {
     @ObservationIgnored private var draftSubmitted = false
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var exportWhenReady = false
+    @ObservationIgnored private var cameraAnimation: Task<Void, Never>?
 
     init() {
         doc = Persistence.loadAutosave() ?? SceneDocument.demo()
@@ -190,6 +195,10 @@ final class EditorModel {
     }
 
     func requestRedraw() {
+        let angles = SIMD2<Float>(camera.yaw, camera.pitch)
+        if angles != viewAngles {
+            viewAngles = angles
+        }
         redrawHandler?()
     }
 
@@ -818,6 +827,11 @@ final class EditorModel {
     }
 
     private func frame(_ ids: [UUID]) {
+        camera.frame(box(of: ids))
+        requestRedraw()
+    }
+
+    private func box(of ids: [UUID]) -> AABB {
         var box = AABB.empty
         for id in ids {
             if let b = bounds(of: id) { box.formUnion(b) }
@@ -825,26 +839,63 @@ final class EditorModel {
         if box.isEmpty {
             box = AABB(lo: Vec3(-40, -40, 0), hi: Vec3(40, 40, 40))
         }
-        camera.frame(box)
-        requestRedraw()
+        return box
     }
 
     func setView(_ preset: ViewPreset) {
         switch preset {
-        case .iso:
-            camera.yaw = -Float.pi / 4
-            camera.pitch = 0.6
-        case .top:
-            camera.yaw = -Float.pi / 2
-            camera.pitch = OrbitCamera.maxPitch
-        case .front:
-            camera.yaw = -Float.pi / 2
-            camera.pitch = 0
-        case .right:
-            camera.yaw = 0
-            camera.pitch = 0
+        case .iso: orient(yaw: -Float.pi / 4, pitch: 0.6)
+        case .top: orient(yaw: -Float.pi / 2, pitch: OrbitCamera.maxPitch)
+        case .front: orient(yaw: -Float.pi / 2, pitch: 0)
+        case .right: orient(yaw: 0, pitch: 0)
         }
-        frameSelection()
+    }
+
+    /// Смотреть со стороны `direction` (от цели к глазу) — для куба навигации.
+    func look(from direction: SIMD3<Float>) {
+        let d = simd_normalize(direction)
+        // Строго сверху или снизу азимут не определён: оставляем текущий, кратный 90°.
+        let quarter = Float.pi / 2
+        let yaw = abs(d.x) + abs(d.y) < 1e-4 ? (camera.yaw / quarter).rounded() * quarter : atan2(d.y, d.x)
+        let pitch = min(max(asin(d.z), -OrbitCamera.maxPitch), OrbitCamera.maxPitch)
+        orient(yaw: yaw, pitch: pitch)
+    }
+
+    private func orient(yaw: Float, pitch: Float) {
+        var goal = camera
+        goal.yaw = yaw
+        goal.pitch = pitch
+        goal.frame(box(of: selection.isEmpty ? doc.nodes.filter(\.visible).map(\.id) : selection))
+        animateCamera(to: goal)
+    }
+
+    /// Плавный перелёт камеры. Обрывается, если камеру тронули во время анимации.
+    private func animateCamera(to goal: OrbitCamera) {
+        cameraAnimation?.cancel()
+        let start = camera
+        // Кратчайший поворот по азимуту.
+        var turn = (goal.yaw - start.yaw).truncatingRemainder(dividingBy: 2 * .pi)
+        if turn > .pi { turn -= 2 * .pi } else if turn < -.pi { turn += 2 * .pi }
+        cameraAnimation = Task { [weak self] in
+            let clock = ContinuousClock()
+            let begin = clock.now
+            var last = start
+            while !Task.isCancelled {
+                guard let self, self.camera == last else { return }
+                let t = Float(min((clock.now - begin) / .milliseconds(280), 1))
+                let k = 1 - pow(1 - t, 3)
+                var step = start
+                step.yaw = start.yaw + turn * k
+                step.pitch = start.pitch + (goal.pitch - start.pitch) * k
+                step.target = start.target + (goal.target - start.target) * k
+                step.distance = start.distance * pow(goal.distance / start.distance, k)
+                self.camera = step
+                last = step
+                self.requestRedraw()
+                if t >= 1 { return }
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+        }
     }
 
     // MARK: Уведомления
