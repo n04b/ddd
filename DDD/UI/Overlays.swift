@@ -7,7 +7,7 @@ import SwiftUI
 import AppKit
 import simd
 
-/// Куб навигации: вращается вместе с камерой. Клик по грани, ребру
+/// Стеклянный куб навигации: вращается вместе с камерой. Клик по грани, ребру
 /// или углу поворачивает вид к этой стороне, перетаскивание — орбита,
 /// правый клик — показать выделенное.
 struct ViewCubeView: View {
@@ -15,7 +15,7 @@ struct ViewCubeView: View {
     @State private var pointer: CGPoint?
     @State private var dragLast: CGPoint?
 
-    static let size: CGFloat = 64
+    static let size: CGFloat = 80
 
     init(model: EditorModel) {
         self.model = model
@@ -25,37 +25,49 @@ struct ViewCubeView: View {
         let cube = CubeProjection(angles: model.viewAngles, size: ViewCubeView.size)
         let hovered = dragLast == nil ? pointer.flatMap { cube.region(at: $0) } : nil
 
-        Canvas { context, _ in
-            cube.draw(in: &context, hovered: hovered)
-        }
-        .frame(width: ViewCubeView.size, height: ViewCubeView.size)
-        .contentShape(Rectangle())
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let point): pointer = point
-            case .ended: pointer = nil
+        Group {
+            if Constants.flatViewCube {
+                Canvas { context, _ in
+                    cube.draw(in: &context, hovered: hovered)
+                }
+            } else {
+                GlassCubeView(right: cube.right, up: cube.up, back: cube.back, hovered: hovered, extent: Float(CubeProjection.extent))
             }
         }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    // Пока сдвиг меньше пары точек, это ещё клик.
-                    let last = dragLast ?? value.startLocation
-                    if dragLast == nil, hypot(value.translation.width, value.translation.height) < 3 { return }
-                    // Куб маленький — крутим вдвое быстрее, чем во вьюпорте.
-                    model.camera.orbit(dx: Float(value.location.x - last.x) * 2, dy: Float(value.location.y - last.y) * 2)
-                    model.requestRedraw()
-                    dragLast = value.location
+        .frame(width: ViewCubeView.size, height: ViewCubeView.size)
+        .overlay { input(cube) }
+    }
+
+    /// Мышь ловит прозрачный слой: Metal-вид под ним событий не принимает.
+    private func input(_ cube: CubeProjection) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): pointer = point
+                case .ended: pointer = nil
                 }
-                .onEnded { value in
-                    if dragLast == nil, let region = cube.region(at: value.startLocation) {
-                        model.look(from: region)
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        // Пока сдвиг меньше пары точек, это ещё клик.
+                        let last = dragLast ?? value.startLocation
+                        if dragLast == nil, hypot(value.translation.width, value.translation.height) < 3 { return }
+                        // Куб маленький — крутим вдвое быстрее, чем во вьюпорте.
+                        model.camera.orbit(dx: Float(value.location.x - last.x) * 2, dy: Float(value.location.y - last.y) * 2)
+                        model.requestRedraw()
+                        dragLast = value.location
                     }
-                    dragLast = nil
-                }
-        )
-        .overlay(RightClickCatcher { model.frameSelection() })
-        .help("Click a side to turn the view · drag to orbit · right-click to frame selection")
+                    .onEnded { value in
+                        if dragLast == nil, let region = cube.region(at: value.startLocation) {
+                            model.look(from: region)
+                        }
+                        dragLast = nil
+                    }
+            )
+            .overlay(RightClickCatcher { model.frameSelection() })
+            .help("Click a side to turn the view · drag to orbit · right-click to frame selection")
     }
 }
 
@@ -105,13 +117,17 @@ private struct CubeFace {
     }
 }
 
-/// Ортографическая проекция куба ±1 в квадрат `size` по углам камеры.
+/// Ортографическая проекция куба ±1 в квадрат `size` по углам камеры:
+/// попадание мышью и отрисовка серого куба.
 private struct CubeProjection {
     let right: SIMD3<Float>
     let up: SIMD3<Float>
     let back: SIMD3<Float>
     let center: CGFloat
     let scale: CGFloat
+
+    /// Половина кадра в единицах куба, общая с шейдером: скруглённый куб влезает при любом повороте.
+    static let extent: CGFloat = 1.6
 
     /// Граница центральной клетки грани в локальных координатах (−1…1).
     private static let inner: CGFloat = 0.55
@@ -126,8 +142,7 @@ private struct CubeProjection {
         up = axes.up
         back = axes.back
         center = size / 2
-        // Диагональ куба √3 должна влезть при любом повороте.
-        scale = size / 2 / 1.8
+        scale = size / 2 / CubeProjection.extent
     }
 
     private func point(_ p: SIMD3<Float>) -> CGPoint {
@@ -156,10 +171,6 @@ private struct CubeProjection {
         value < -inner ? -1 : (value > inner ? 1 : 0)
     }
 
-    private static func span(_ cell: Float) -> (CGFloat, CGFloat) {
-        cell < 0 ? (-1, -inner) : (cell > 0 ? (inner, 1) : (-inner, inner))
-    }
-
     func region(at screen: CGPoint) -> SIMD3<Float>? {
         for face in visibleFaces {
             let local = screen.applying(transform(face).inverted())
@@ -170,6 +181,11 @@ private struct CubeProjection {
         return nil
     }
 
+    private static func span(_ cell: Float) -> (CGFloat, CGFloat) {
+        cell < 0 ? (-1, -inner) : (cell > 0 ? (inner, 1) : (-inner, inner))
+    }
+
+    /// Серый куб (Constants.flatViewCube): матовые грани и подсветка зоны под курсором.
     func draw(in context: inout GraphicsContext, hovered: SIMD3<Float>?) {
         for face in visibleFaces {
             let t = transform(face)
