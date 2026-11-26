@@ -9,6 +9,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 - **Primitives:** box, sphere and cylinder, each with a position, rotation and size.
 - **Solids, holes and masks.** A group is a boolean operation: (union of its solids − union of its holes) ∩ union of its masks. A mask is a 3D clipping mask: only the part of the group inside it remains. Holes and masks only act inside their own group.
 - **Box fillets and chamfers.** Each of the 12 edges can be filleted or get a 45° chamfer, and each of the 8 corners is either auto or cut. You edit them with handles right on the model.
+- **Reference images.** A photo, drawing or PDF lies on the top, front or right plane as a backdrop to model over. Its scale comes from the file's DPI and can be calibrated by two points of a known distance; points marked on it show their coordinates in millimeters.
 - **Parametric model.** A project stores parameters, not triangles, so you can change sizes and fillets at any time.
 - **Background computation.** While you drag a value, a draft is shown; the exact geometry is computed when you release.
 - **Number fields accept expressions:** `20+5`, `60/2-1,5`, `12 mm`.
@@ -44,6 +45,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 | ⌘↑ / ⌘↓, PgUp / PgDn | Move along Z |
 | ⌫ | Delete |
 | Esc | Clear the selection |
+| P / R | With a reference image selected: place points / calibrate the scale |
 
 Keys work in any keyboard layout, because the app reads key codes rather than characters.
 
@@ -52,6 +54,7 @@ Keys work in any keyboard layout, because the app reads key codes rather than ch
 | Shortcut | Action |
 |---|---|
 | ⌘N / ⌘O | New project / open |
+| ⇧⌘I | Import a reference image |
 | ⌘S / ⇧⌘S | Save / save as |
 | ⌘E | Export STL |
 | ⌘Z / ⇧⌘Z | Undo / redo |
@@ -102,6 +105,26 @@ How values work:
 
 Presets are in the inspector, in **Object → Fillets** and in the tree's context menu: All Edges, Top + Vertical, Vertical, Top Only, For Printing (45° chamfer on the bottom) and Reset Fillets.
 
+## Reference images
+
+Import a picture with **File → Import Reference Image…** (⇧⌘I), the photo button in the toolbar, or by dropping a file on the viewport. PNG, JPEG, HEIC, TIFF and the first page of a PDF are supported. The image lies on the plane that faces the camera: the bed in the isometric and top views, the front or right plane in those views. On a vertical plane it stands on the bed.
+
+**Scale.** By default the size comes from the DPI stored in the file; without it, 72 dpi is assumed. A PDF page keeps its exact paper size. In the inspector you can type the DPI, the width or the height, or **Calibrate by two points** (R): click both ends of a distance you know on the image, type its real length and press Return. The first point stays in place. **Reset** returns the file's DPI.
+
+**Points.** Press P (or **Add** in the inspector's **POINTS** row) and click the image to mark corners, hole centers and other key spots. Points are labeled A, B, C…, always drawn on top of the model, and listed in the inspector with their world coordinates. Hovering a point shows its X, Y and Z.
+
+| To | Do |
+|---|---|
+| Select the image | Click its row in the tree, double-click it in the viewport, or click one of its points |
+| Move it | Drag the selected image along its plane (1 mm steps, ⌥ — no snapping); the arrow keys move it like an object |
+| Move a point | Drag it |
+| Select several points | ⇧- or ⌘-click; ⌘A selects all |
+| Measure | Select two points: the inspector shows the distance between them. Type the real distance to scale the image |
+| Put a point at the origin | The ⌖ button in the point's row: on the bed the point goes to X 0, Y 0; on a vertical plane it stands on the bed at 0 |
+| Delete points | ⌫ deletes the selected points; with no points selected, it deletes the image |
+
+A single click on an unselected image works like a click on empty space, so the backdrop doesn't get in the way of modeling. **Lock in the viewport** keeps a selected image from moving when you drag it. **Show over the model** draws the image on top of the bodies, so its outline shows through them; otherwise the image is a translucent sheet and bodies in front of it hide it. The plane, rotation in the plane (with 90° buttons and a mirror), center and opacity are in the inspector.
+
 ## Requirements and building
 
 - macOS 26.5 or later.
@@ -117,8 +140,8 @@ There are no external dependencies: rendering is Metal, the interface is SwiftUI
 
 ## Files
 
-- **Project:** JSON with the node tree and its parameters.
-- **Autosave:** `autosave.json` in the app container's Application Support folder, written 0.6 s after each edit.
+- **Project:** JSON with the node tree and its parameters. Reference images are embedded in it, so a project opens on another computer.
+- **Autosave:** `autosave.json` in the app container's Application Support folder, written 0.6 s after each edit. Reference images are kept next to it in `references/`, one file per image content; files the document no longer uses are removed at launch.
 - **STL:** binary, in millimeters. It contains the visible top-level solids with exact geometry; if a computation is running, the export waits for it.
 
 ## How it works
@@ -129,9 +152,12 @@ DDD/
 ├── ContentView.swift       full-window viewport with floating panels
 ├── App/
 │   ├── EditorModel.swift   state, selection, history, fillet mode, files
+│   ├── EditorModel+References.swift  reference images: import, scale, points
+│   ├── ImageAssets.swift   image store, DPI and orientation, PDF pages
 │   └── Persistence.swift   autosave
 ├── Core/                   geometry in Double, no Apple frameworks
 │   ├── Scene.swift         the document: a tree of nodes
+│   ├── Reference.swift     reference image on a plane, its points and scale
 │   ├── Math.swift          vectors, matrices, poses, bounding boxes
 │   ├── Tessellator.swift   primitives to polygons
 │   ├── RoundedBox.swift    box fillets, chamfers and corner cuts
@@ -140,7 +166,7 @@ DDD/
 │   ├── Picking.swift       ray picking
 │   ├── Expression.swift    expressions in number fields
 │   └── STLWriter.swift     export
-├── Viewport/               Metal renderer, camera, mouse and keyboard, fillet handles
+├── Viewport/               Metal renderer, camera, mouse and keyboard, fillet handles, reference images
 └── UI/                     toolbar, tree, inspector, theme
 ```
 

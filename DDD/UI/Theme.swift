@@ -11,6 +11,8 @@ enum Theme {
     static let orange = Color(red: 1.00, green: 0.72, blue: 0.42)
     static let emerald = Color(red: 0.31, green: 0.87, blue: 0.64)
     static let violet = Color(red: 0.72, green: 0.58, blue: 1.00)
+    /// Референс-изображения.
+    static let sand = Color(red: 0.93, green: 0.80, blue: 0.56)
     static let red = Color(red: 1.00, green: 0.47, blue: 0.44)
     static let axisX = Color(red: 1.00, green: 0.45, blue: 0.45)
     static let axisY = Color(red: 0.45, green: 0.90, blue: 0.55)

@@ -40,7 +40,7 @@ struct ContentView: View {
             HStack(alignment: .top, spacing: 0) {
                 TreePanel(model: model)
                 Spacer(minLength: 16)
-                if !model.selection.isEmpty {
+                if !model.selection.isEmpty || model.selectedReference != nil {
                     InspectorPanel(model: model)
                         // Под кубом навигации.
                         .padding(.top, ViewCubeView.size - 32)
@@ -55,6 +55,18 @@ struct ContentView: View {
             ToolbarView(model: model)
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            // Подсказка инструмента разметки: что делать дальше.
+            Group {
+                if let hint = model.referenceToolHint {
+                    ToolHintView(text: hint)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.top, 54)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.15), value: model.referenceToolHint)
 
             ViewCubeView(model: model)
                 .padding(.top, 12)

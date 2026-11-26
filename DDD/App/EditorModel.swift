@@ -48,6 +48,14 @@ final class EditorModel {
     /// Режим контуров: невыделенные отверстия и маски — одной линией,
     /// соседи выделенного по группе — заливкой. Переключается пробелом.
     var outlineMode = false
+    /// Выделенное референс-изображение. С выделением объектов не совмещается.
+    var selectedReference: UUID?
+    /// Выделенные точки разметки этой картинки; последняя — активная.
+    var markerSelection: [UUID] = []
+    /// Инструмент разметки во вьюпорте: точки или калибровка масштаба.
+    var referenceTool: ReferenceTool = .none
+    /// Концы отрезка калибровки в пикселях картинки: 0, 1 или 2.
+    var calibrationPoints: [Point2] = []
     var toast: Toast?
     private(set) var output = KernelOutput()
     private(set) var isComputing = false
@@ -70,10 +78,14 @@ final class EditorModel {
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var exportWhenReady = false
     @ObservationIgnored private var cameraAnimation: Task<Void, Never>?
+    @ObservationIgnored var referenceMoveStart: (id: UUID, center: Vec3)?
 
     init() {
         doc = Persistence.loadAutosave() ?? SceneDocument.demo()
         expanded = Set(doc.allNodes().filter { $0.kind == .group }.map(\.id))
+        // Картинки, на которые ничто не ссылается, остались от прошлых сессий. Сразу, а не в фоне:
+        // иначе уборка могла бы задеть картинку, импортированную в первые мгновения.
+        ImageAssets.collectGarbage(keeping: Set(doc.references.map(\.asset)))
         worker = KernelWorker { [unowned self] result in
             Task { @MainActor in
                 self.receive(result)
@@ -118,9 +130,11 @@ final class EditorModel {
             redoStack.removeAll()
         }
         coalesceKey = key
+        // Правка только референсов геометрию не меняет: ядро не трогаем.
+        let geometry = next.nodes != doc.nodes
         doc = next
         // Слитые правки идут потоком (тянут поле, двигают мышью): пока считаем черновик.
-        documentChanged(draft: key != nil)
+        documentChanged(draft: key != nil, geometry: geometry)
     }
 
     /// Следующая правка начнёт новый шаг истории. Правка закончена — считаем точно.
@@ -147,8 +161,10 @@ final class EditorModel {
         documentChanged()
     }
 
-    private func documentChanged(draft: Bool = false) {
-        scheduleEvaluation(draft: draft)
+    private func documentChanged(draft: Bool = false, geometry: Bool = true) {
+        if geometry {
+            scheduleEvaluation(draft: draft)
+        }
         scheduleAutosave()
         requestRedraw()
     }
@@ -205,6 +221,7 @@ final class EditorModel {
     // MARK: Выделение
 
     func select(_ id: UUID?) {
+        clearReferenceSelection()
         selection = id.map { [$0] } ?? []
         dropStaleFilletMode()
         if let id {
@@ -214,6 +231,7 @@ final class EditorModel {
     }
 
     func toggleSelection(_ id: UUID) {
+        clearReferenceSelection()
         if let index = selection.firstIndex(of: id) {
             selection.remove(at: index)
         } else {
@@ -224,7 +242,7 @@ final class EditorModel {
     }
 
     /// Выделили другое — режим скруглений закрывается, а не ждёт возврата к блоку.
-    private func dropStaleFilletMode() {
+    func dropStaleFilletMode() {
         if let target = filletTarget, selection != [target] {
             filletTarget = nil
             filletSelection = []
@@ -241,6 +259,14 @@ final class EditorModel {
 
     private func pruneSelection() {
         selection = selection.filter { doc.node($0) != nil }
+        if let id = selectedReference {
+            if let reference = doc.reference(id) {
+                let markers = Set(reference.markers.map(\.id))
+                markerSelection = markerSelection.filter { markers.contains($0) }
+            } else {
+                clearReferenceSelection()
+            }
+        }
     }
 
     /// Выделенные узлы без тех, чей предок тоже выделен.
@@ -357,6 +383,10 @@ final class EditorModel {
     }
 
     func duplicateSelection() {
+        if let id = selectedReference {
+            duplicateReference(id)
+            return
+        }
         let ids = topmostSelected()
         guard !ids.isEmpty else { return }
         var copies: [UUID] = []
@@ -376,6 +406,15 @@ final class EditorModel {
     }
 
     func deleteSelection() {
+        if let id = selectedReference {
+            // Сначала точки разметки, следующий ⌫ — сама картинка.
+            if markerSelection.isEmpty {
+                deleteReference(id)
+            } else {
+                deleteSelectedMarkers()
+            }
+            return
+        }
         let ids = topmostSelected()
         guard !ids.isEmpty else { return }
         let firstName = doc.node(ids[0])?.name ?? ""
@@ -811,6 +850,10 @@ final class EditorModel {
     }
 
     func nudge(_ worldDelta: Vec3) {
+        if let id = selectedReference {
+            nudgeReference(id, worldDelta)
+            return
+        }
         beginMove()
         updateMove(worldDelta: worldDelta, snap: false)
         endMove()
@@ -819,16 +862,44 @@ final class EditorModel {
     // MARK: Камера
 
     func frameAll() {
-        frame(doc.nodes.filter(\.visible).map(\.id))
+        let ids = doc.nodes.filter(\.visible).map(\.id)
+        // Сцена из одних картинок: показываем их, а не пустой стол.
+        if ids.isEmpty, let pictures = referencesBox() {
+            camera.frame(pictures)
+            requestRedraw()
+            return
+        }
+        frame(ids)
     }
 
     func frameSelection() {
-        frame(selection.isEmpty ? doc.nodes.filter(\.visible).map(\.id) : selection)
+        camera.frame(selectionBox())
+        requestRedraw()
     }
 
     private func frame(_ ids: [UUID]) {
         camera.frame(box(of: ids))
         requestRedraw()
+    }
+
+    /// Что обрамлять: выделенную картинку, выделенные объекты или всё.
+    private func selectionBox() -> AABB {
+        if let reference = selectedReferenceImage {
+            return reference.bounds
+        }
+        let ids = selection.isEmpty ? doc.nodes.filter(\.visible).map(\.id) : selection
+        if ids.isEmpty, let pictures = referencesBox() {
+            return pictures
+        }
+        return box(of: ids)
+    }
+
+    private func referencesBox() -> AABB? {
+        var box = AABB.empty
+        for reference in doc.references where reference.visible {
+            box.formUnion(reference.bounds)
+        }
+        return box.isEmpty ? nil : box
     }
 
     private func box(of ids: [UUID]) -> AABB {
@@ -865,12 +936,12 @@ final class EditorModel {
         var goal = camera
         goal.yaw = yaw
         goal.pitch = pitch
-        goal.frame(box(of: selection.isEmpty ? doc.nodes.filter(\.visible).map(\.id) : selection))
+        goal.frame(selectionBox())
         animateCamera(to: goal)
     }
 
     /// Плавный перелёт камеры. Обрывается, если камеру тронули во время анимации.
-    private func animateCamera(to goal: OrbitCamera) {
+    func animateCamera(to goal: OrbitCamera) {
         cameraAnimation?.cancel()
         let start = camera
         // Кратчайший поворот по азимуту.
@@ -943,7 +1014,9 @@ final class EditorModel {
             guard let self, response == .OK, let url = panel.url else { return }
             do {
                 let data = try Data(contentsOf: url)
-                let loaded = try JSONDecoder().decode(SceneDocument.self, from: data)
+                let decoded = try JSONDecoder().decode(SceneDocument.self, from: data)
+                // Встроенные в проект картинки — в хранилище, в документе остаются ключи.
+                let loaded = ImageAssets.extracting(decoded)
                 self.replaceDocument(loaded)
                 self.projectURL = url
                 self.showToast("Opened: \(url.lastPathComponent)", undo: true)
@@ -975,8 +1048,14 @@ final class EditorModel {
 
     private func write(to url: URL) {
         do {
-            try Persistence.save(doc, to: url)
-            showToast("Saved: \(url.lastPathComponent)")
+            // Картинки встраиваются в файл: проект открывается и на другом компьютере.
+            let project = ImageAssets.embedding(doc)
+            try Persistence.save(project.document, to: url)
+            if project.missing > 0 {
+                showToast("Saved: \(url.lastPathComponent), but \(project.missing) reference image(s) were not found")
+            } else {
+                showToast("Saved: \(url.lastPathComponent)")
+            }
         } catch {
             showToast("Could not save: \(error.localizedDescription)")
         }
@@ -1016,6 +1095,7 @@ final class EditorModel {
 
     private func replaceDocument(_ document: SceneDocument) {
         mutate { $0 = document }
+        clearReferenceSelection()
         selection = []
         renamingID = nil
         expanded = Set(doc.allNodes().filter { $0.kind == .group }.map(\.id))

@@ -69,6 +69,52 @@ enum ShaderSource {
         return u.color;
     }
 
+    // Совпадает с ImageUniforms в Renderer.swift.
+    struct ImageUniforms {
+        float4x4 viewProj;
+        float4x4 model;    // квадрат −0.5…0.5 → прямоугольник картинки в мире
+        float4 params;     // x: непрозрачность
+    };
+
+    struct ImageVertex {
+        float4 position [[position]];
+        float2 uv;
+    };
+
+    constant float2 kQuad[6] = {
+        float2(-0.5, -0.5), float2(0.5, -0.5), float2(0.5, 0.5),
+        float2(-0.5, -0.5), float2(0.5, 0.5), float2(-0.5, 0.5)
+    };
+
+    // Референс-изображение: два треугольника без буфера вершин; uv (0, 0) — левый верхний угол.
+    vertex ImageVertex vimage(uint vid [[vertex_id]],
+                              constant ImageUniforms& u [[buffer(1)]]) {
+        float2 c = kQuad[vid];
+        ImageVertex out;
+        out.position = u.viewProj * (u.model * float4(c, 0.0, 1.0));
+        out.uv = float2(c.x + 0.5, 0.5 - c.y);
+        return out;
+    }
+
+    // Текстура с premultiplied alpha: непрозрачность умножает все четыре канала.
+    fragment float4 fimage(ImageVertex in [[stage_in]],
+                           texture2d<float> image [[texture(0)]],
+                           constant ImageUniforms& u [[buffer(1)]]) {
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge, max_anisotropy(8));
+        return image.sample(s, in.uv) * u.params.x;
+    }
+
+    // Только глубина: плотная картинка заслоняет то, что рисуется после неё (сетку стола).
+    fragment float4 fimagedepth(ImageVertex in [[stage_in]],
+                                texture2d<float> image [[texture(0)]],
+                                constant ImageUniforms& u [[buffer(1)]]) {
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
+        if (image.sample(s, in.uv).a * u.params.x < 0.5) {
+            discard_fragment();
+        }
+        return float4(0.0);
+    }
+
     // Совпадает с OutlineUniforms в Renderer.swift.
     struct OutlineUniforms {
         float4 colors[4];  // цвет линии для каждого канала маски

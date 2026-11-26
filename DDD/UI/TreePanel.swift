@@ -28,7 +28,7 @@ struct TreePanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     if model.doc.nodes.isEmpty {
-                        Text("Empty. B — box, S — sphere, C — cylinder")
+                        Text("Empty. B — box, S — sphere, C — cylinder, ⇧⌘I — reference image")
                             .font(Theme.label(11))
                             .foregroundStyle(Theme.tertiary)
                             .padding(.horizontal, 8)
@@ -39,6 +39,15 @@ struct TreePanel: View {
                                 inheritedOutline: item.inheritedOutline)
                     }
                     rootDropZone
+                    if !model.doc.references.isEmpty {
+                        SectionTitle(text: "REFERENCES")
+                            .padding(.horizontal, 8)
+                            .padding(.top, 4)
+                            .padding(.bottom, 2)
+                        ForEach(model.doc.references) { reference in
+                            ReferenceRow(model: model, reference: reference)
+                        }
+                    }
                 }
                 .padding(6)
                 .onGeometryChange(for: CGFloat.self) { proxy in
@@ -326,6 +335,167 @@ private struct RenameField: View {
     private func commit() {
         guard model.renamingID == node.id else { return }
         model.rename(node.id, text)
+        model.renamingID = nil
+    }
+}
+
+/// Строка референс-изображения: выделение, переименование, замок, видимость.
+private struct ReferenceRow: View {
+    let model: EditorModel
+    let reference: ReferenceImage
+    @State private var hovering = false
+
+    init(model: EditorModel, reference: ReferenceImage) {
+        self.model = model
+        self.reference = reference
+    }
+
+    var body: some View {
+        let selected = model.selectedReference == reference.id
+        let id = reference.id
+
+        HStack(spacing: 6) {
+            Color.clear.frame(width: 12, height: 20)
+
+            Image(systemName: "photo")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.sand)
+                .frame(width: 14)
+
+            if model.renamingID == id {
+                ReferenceRenameField(model: model, reference: reference)
+            } else {
+                Text(reference.name)
+                    .font(Theme.label(12))
+                    .foregroundStyle(selected ? Theme.cyan : Theme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+            }
+
+            Text("\(Int(reference.width.rounded()))×\(Int(reference.height.rounded()))")
+                .font(Theme.mono(9.5))
+                .foregroundStyle(Theme.tertiary)
+                .lineLimit(1)
+
+            if !reference.markers.isEmpty {
+                Text("· \(reference.markers.count) pt")
+                    .font(Theme.mono(9.5))
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            if hovering || reference.locked {
+                Button {
+                    model.setReferenceLocked(id, !reference.locked)
+                } label: {
+                    Image(systemName: reference.locked ? "lock.fill" : "lock.open")
+                        .font(.system(size: 10))
+                        .foregroundStyle(reference.locked ? Theme.sand : Theme.tertiary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(reference.locked ? "Unlock: drag the image to move it" : "Lock: dragging the image won't move it")
+            }
+
+            if hovering || !reference.visible {
+                Button {
+                    model.setReferenceVisible(id, !reference.visible)
+                } label: {
+                    Image(systemName: reference.visible ? "eye" : "eye.slash")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(reference.visible ? "Hide" : "Show")
+            } else if reference.locked {
+                // Место глаза, чтобы замок не прыгал при наведении.
+                Color.clear.frame(width: 18, height: 18)
+            }
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 6)
+        .frame(height: 24)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(selected ? Theme.cyan.opacity(0.14) : (hovering ? Color.white.opacity(0.05) : Color.clear))
+        )
+        .opacity(reference.visible ? 1 : 0.45)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { model.selectReference(id) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            model.renamingID = id
+        })
+        .contextMenu {
+            Button("Rename") { model.renamingID = id }
+            Menu("Plane") {
+                ForEach(ReferencePlane.allCases, id: \.self) { plane in
+                    Button(plane.title + (reference.plane == plane ? " ✓" : "")) {
+                        model.setReferencePlane(id, plane)
+                    }
+                }
+            }
+            Button("Add Points") {
+                model.selectReference(id)
+                model.setReferenceTool(.points)
+            }
+            Button("Calibrate Scale…") {
+                model.selectReference(id)
+                model.setReferenceTool(.calibrate)
+            }
+            Button("Reset Scale to File DPI") { model.resetReferenceScale(id) }
+            Divider()
+            Button(reference.locked ? "Unlock" : "Lock") { model.setReferenceLocked(id, !reference.locked) }
+            Button(reference.onTop ? "Draw Under the Model" : "Show Over the Model") {
+                model.setReferenceOnTop(id, !reference.onTop)
+            }
+            Button("Frame") { model.frameReference(id) }
+            Divider()
+            Button("Duplicate") { model.duplicateReference(id) }
+            Button("Delete") { model.deleteReference(id) }
+        }
+    }
+}
+
+private struct ReferenceRenameField: View {
+    let model: EditorModel
+    let reference: ReferenceImage
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    init(model: EditorModel, reference: ReferenceImage) {
+        self.model = model
+        self.reference = reference
+    }
+
+    var body: some View {
+        TextField("", text: $text)
+            .textFieldStyle(.plain)
+            .font(Theme.label(12))
+            .foregroundStyle(Theme.text)
+            .focused($focused)
+            .onAppear {
+                text = reference.name
+                focused = true
+            }
+            .onSubmit(commit)
+            .onExitCommand {
+                model.renamingID = nil
+            }
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { commit() }
+            }
+    }
+
+    private func commit() {
+        guard model.renamingID == reference.id else { return }
+        model.renameReference(reference.id, text)
         model.renamingID = nil
     }
 }

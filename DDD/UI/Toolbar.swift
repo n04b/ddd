@@ -14,12 +14,18 @@ struct ToolbarView: View {
 
     var body: some View {
         let hasSelection = !model.selection.isEmpty
+        // Дублировать и удалять можно и выделенную картинку.
+        let canEdit = hasSelection || model.selectedReference != nil
         let primary = model.primary
 
         HStack(spacing: 2) {
             tool("cube", "Box — B") { model.add(.box) }
             tool("circle", "Sphere — S") { model.add(.sphere) }
             tool("cylinder", "Cylinder — C") { model.add(.cylinder) }
+            tool("photo.badge.plus", "Reference image — ⇧⌘I, or drop a file on the viewport",
+                 tint: model.selectedReference != nil ? Theme.sand : nil) {
+                model.importReferenceImages()
+            }
 
             divider
 
@@ -42,10 +48,10 @@ struct ToolbarView: View {
 
             divider
 
-            tool("plus.square.on.square", "Duplicate — ⌘D", enabled: hasSelection) {
+            tool("plus.square.on.square", "Duplicate — ⌘D", enabled: canEdit) {
                 model.duplicateSelection()
             }
-            tool("trash", "Delete — ⌫", enabled: hasSelection) {
+            tool("trash", "Delete — ⌫", enabled: canEdit) {
                 model.deleteSelection()
             }
 

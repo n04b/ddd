@@ -10,22 +10,37 @@ import AppKit
 
 struct InspectorPanel: View {
     let model: EditorModel
+    @State private var contentHeight: CGFloat = 240
 
     init(model: EditorModel) {
         self.model = model
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if model.selection.count > 1 {
-                MultiSelectionInspector(model: model)
-            } else if let node = model.primary {
-                NodeInspector(model: model, node: node)
-                    .id(node.id)
+        // Панель по высоте содержимого; в низком окне — с прокруткой.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if let reference = model.selectedReferenceImage {
+                    ReferenceInspector(model: model, reference: reference)
+                        .id(reference.id)
+                } else if model.selection.count > 1 {
+                    MultiSelectionInspector(model: model)
+                } else if let node = model.primary {
+                    NodeInspector(model: model, node: node)
+                        .id(node.id)
+                }
+            }
+            .padding(12)
+            .frame(width: 252, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                contentHeight = height
             }
         }
-        .padding(12)
-        .frame(width: 252, alignment: .leading)
+        .scrollIndicators(.never)
+        .frame(width: 252)
+        .frame(maxHeight: contentHeight)
         .glass()
     }
 }
@@ -423,6 +438,7 @@ struct ModeSwitch: View {
 struct NumberField: View {
     let label: String
     let labelColor: Color
+    let labelWidth: CGFloat
     let value: Double
     let unit: String
     let dragStep: Double
@@ -436,11 +452,12 @@ struct NumberField: View {
     @State private var dragStart: Double?
     @FocusState private var focused: Bool
 
-    init(label: String, labelColor: Color, value: Double, unit: String,
+    init(label: String, labelColor: Color, labelWidth: CGFloat = 16, value: Double, unit: String,
          dragStep: Double, keyStep: Double, minimum: Double?,
          onChange: @escaping (Double) -> Void, onFinish: @escaping () -> Void) {
         self.label = label
         self.labelColor = labelColor
+        self.labelWidth = labelWidth
         self.value = value
         self.unit = unit
         self.dragStep = dragStep
@@ -457,7 +474,7 @@ struct NumberField: View {
             Text(label)
                 .font(Theme.label(10.5, .semibold))
                 .foregroundStyle(labelColor)
-                .frame(width: 16, height: 24, alignment: .leading)
+                .frame(width: labelWidth, height: 24, alignment: .leading)
                 .contentShape(Rectangle())
                 .onHover { inside in
                     if inside {
@@ -528,6 +545,13 @@ struct NumberField: View {
     }
 
     private func commit() {
+        // Текст не правили — значение не трогаем: в поле оно округлено, и фокус без правки
+        // иначе записал бы округлённое (у DPI или размера картинки сдвинулся бы масштаб).
+        if text == Fmt.number(value) {
+            invalid = false
+            onFinish()
+            return
+        }
         guard let parsed = ExpressionEvaluator.evaluate(text) else {
             invalid = true
             text = Fmt.number(value)

@@ -24,6 +24,9 @@ struct DDDApp: App {
                     .keyboardShortcut("n")
                 Button("Open…") { model.openProject() }
                     .keyboardShortcut("o")
+                Divider()
+                Button("Import Reference Image…") { model.importReferenceImages() }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save") { model.saveProject() }
@@ -70,6 +73,41 @@ struct DDDApp: App {
                 Divider()
                 Button("Frame Selection") { model.frameSelection() }
                     .keyboardShortcut("f", modifiers: [.command, .option])
+            }
+            // Без однобуквенных сочетаний: P и R ловит вьюпорт, а в меню они мешали бы полям ввода.
+            CommandMenu("Reference") {
+                let reference = model.selectedReferenceImage
+                Button("Import Image…") { model.importReferenceImages() }
+                Divider()
+                Button(model.referenceTool == .points ? "Stop Adding Points" : "Add Points") {
+                    model.setReferenceTool(model.referenceTool == .points ? .none : .points)
+                }
+                .disabled(reference == nil)
+                Button(model.referenceTool == .calibrate ? "Cancel Calibration" : "Calibrate Scale…") {
+                    model.setReferenceTool(model.referenceTool == .calibrate ? .none : .calibrate)
+                }
+                .disabled(reference == nil)
+                Button("Reset Scale to File DPI") {
+                    if let id = reference?.id { model.resetReferenceScale(id) }
+                }
+                .disabled(reference == nil)
+                Menu("Plane") {
+                    ForEach(ReferencePlane.allCases, id: \.self) { plane in
+                        Button(plane.title) {
+                            if let id = reference?.id { model.setReferencePlane(id, plane) }
+                        }
+                    }
+                }
+                .disabled(reference == nil)
+                Divider()
+                Button(reference?.locked == true ? "Unlock" : "Lock") {
+                    if let reference { model.setReferenceLocked(reference.id, !reference.locked) }
+                }
+                .disabled(reference == nil)
+                Button(reference?.onTop == true ? "Draw Under the Model" : "Show Over the Model") {
+                    if let reference { model.setReferenceOnTop(reference.id, !reference.onTop) }
+                }
+                .disabled(reference == nil)
             }
         }
     }

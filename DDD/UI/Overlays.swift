@@ -264,3 +264,23 @@ struct ToastView: View {
         .glass(radius: 18)
     }
 }
+
+/// Подсказка активного инструмента под тулбаром: что делать дальше.
+struct ToolHintView: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Theme.sand)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(Theme.label(11.5))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .glass(radius: 16)
+    }
+}

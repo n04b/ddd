@@ -21,6 +21,14 @@ struct OutlineUniforms {
     var params: SIMD4<Float>
 }
 
+struct ImageUniforms {
+    var viewProj: simd_float4x4
+    /// Квадрат −0.5…0.5 → прямоугольник картинки в мире.
+    var model: simd_float4x4
+    /// x — непрозрачность.
+    var params: SIMD4<Float>
+}
+
 struct GPUMesh {
     let buffer: MTLBuffer
     let count: Int
@@ -56,6 +64,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let pipeline: MTLRenderPipelineState
     private let maskPipeline: MTLRenderPipelineState
     private let outlinePipeline: MTLRenderPipelineState
+    private let imagePipeline: MTLRenderPipelineState
+    private let imageDepthPipeline: MTLRenderPipelineState
+    private let textures: ReferenceTextures
     private let depthWrite: MTLDepthStencilState
     private let depthTest: MTLDepthStencilState
     private let depthAlways: MTLDepthStencilState
@@ -117,13 +128,26 @@ final class Renderer: NSObject, MTKViewDelegate {
         outlineDescriptor.vertexFunction = library.makeFunction(name: "voutline")
         outlineDescriptor.fragmentFunction = library.makeFunction(name: "foutline")
 
+        // Картинки: текстура уже с premultiplied alpha, поэтому источник берётся как есть.
+        let imageDescriptor = descriptor.copy() as! MTLRenderPipelineDescriptor
+        imageDescriptor.vertexFunction = library.makeFunction(name: "vimage")
+        imageDescriptor.fragmentFunction = library.makeFunction(name: "fimage")
+        imageDescriptor.colorAttachments[0].sourceRGBBlendFactor = .one
+        let imageDepthDescriptor = imageDescriptor.copy() as! MTLRenderPipelineDescriptor
+        imageDepthDescriptor.fragmentFunction = library.makeFunction(name: "fimagedepth")
+        imageDepthDescriptor.colorAttachments[0].writeMask = []
+
         let pipeline: MTLRenderPipelineState
         let maskPipeline: MTLRenderPipelineState
         let outlinePipeline: MTLRenderPipelineState
+        let imagePipeline: MTLRenderPipelineState
+        let imageDepthPipeline: MTLRenderPipelineState
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
             maskPipeline = try device.makeRenderPipelineState(descriptor: maskDescriptor)
             outlinePipeline = try device.makeRenderPipelineState(descriptor: outlineDescriptor)
+            imagePipeline = try device.makeRenderPipelineState(descriptor: imageDescriptor)
+            imageDepthPipeline = try device.makeRenderPipelineState(descriptor: imageDepthDescriptor)
         } catch {
             print("Renderer: failed to build pipeline: \(error)")
             return nil
@@ -140,12 +164,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.pipeline = pipeline
         self.maskPipeline = maskPipeline
         self.outlinePipeline = outlinePipeline
+        self.imagePipeline = imagePipeline
+        self.imageDepthPipeline = imageDepthPipeline
+        self.textures = ReferenceTextures(device: device, queue: queue)
         self.depthWrite = depthWrite
         self.depthTest = depthTest
         self.depthAlways = depthAlways
         self.grid = Renderer.makeGrid(device: device, plate: Renderer.plateSize)
         self.model = model
         super.init()
+        textures.onLoad = { [weak self] in
+            self?.model?.requestRedraw()
+        }
     }
 
     // MARK: MTKViewDelegate
@@ -262,6 +292,11 @@ final class Renderer: NSObject, MTKViewDelegate {
                    lit: true, depth: depthWrite, model: matrix)
         }
 
+        // 1½. Референс-изображения — полупрозрачные листы: тело за листом видно сквозь него.
+        textures.keep(only: Set(document.references.map(\.asset)))
+        let sheets = referenceDraws(document, viewProj: viewProj, eye: eye)
+        drawReferences(encoder, sheets.filter { !$0.onTop }, onTop: false)
+
         // 2. Стол.
         for line in grid {
             submit(line.mesh, line.color, lit: false, depth: depthTest, primitive: .line)
@@ -306,9 +341,77 @@ final class Renderer: NSObject, MTKViewDelegate {
             submit(mesh, Palette.selection, lit: true, depth: depthTest, model: matrix)
         }
 
+        // 5. Картинки «поверх модели» — последними и без теста глубины: контур виден сквозь тела.
+        drawReferences(encoder, sheets.filter(\.onTop), onTop: true)
+
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: Референсы
+
+    private struct ReferenceDraw {
+        let texture: MTLTexture
+        let uniforms: ImageUniforms
+        let onTop: Bool
+    }
+
+    /// Видимые картинки, у которых текстура уже загружена.
+    private func referenceDraws(_ document: SceneDocument, viewProj: simd_float4x4, eye: SIMD3<Float>) -> [ReferenceDraw] {
+        var result: [ReferenceDraw] = []
+        for reference in document.references where reference.visible && reference.opacity > 0.001 {
+            guard let texture = textures.texture(reference.asset) else { continue }
+            // С изнанки картинка видна зеркально и бледнее.
+            let facing = (Vec3(eye) - reference.center).dot(reference.axes.normal) >= 0
+            let opacity = Float(reference.opacity) * (facing ? 1 : 0.5)
+            let uniforms = ImageUniforms(viewProj: viewProj, model: Renderer.imageMatrix(reference),
+                                         params: SIMD4<Float>(opacity, 0, 0, 0))
+            result.append(ReferenceDraw(texture: texture, uniforms: uniforms, onTop: reference.onTop))
+        }
+        return result
+    }
+
+    /// Обычные картинки проверяют глубину и чуть уступают граням в своей плоскости:
+    /// тело, стоящее на картинке, не мерцает. Плотные потом пишут глубину, чтобы
+    /// сетка стола за ними не проступала. Картинки «поверх модели» глубину не смотрят.
+    private func drawReferences(_ encoder: MTLRenderCommandEncoder, _ draws: [ReferenceDraw], onTop: Bool) {
+        guard !draws.isEmpty else { return }
+        func draw(_ item: ReferenceDraw) {
+            var uniforms = item.uniforms
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<ImageUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ImageUniforms>.stride, index: 1)
+            encoder.setFragmentTexture(item.texture, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        }
+        encoder.setRenderPipelineState(imagePipeline)
+        if onTop {
+            encoder.setDepthStencilState(depthAlways)
+            draws.forEach(draw)
+        } else {
+            encoder.setDepthBias(4, slopeScale: 2, clamp: 0)
+            encoder.setDepthStencilState(depthTest)
+            draws.forEach(draw)
+            encoder.setRenderPipelineState(imageDepthPipeline)
+            encoder.setDepthStencilState(depthWrite)
+            draws.filter { $0.uniforms.params.x >= 0.5 }.forEach(draw)
+            encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+        }
+        encoder.setRenderPipelineState(pipeline)
+    }
+
+    private static func imageMatrix(_ reference: ReferenceImage) -> simd_float4x4 {
+        let axes = reference.axes
+        let x = axes.right * reference.width
+        let y = axes.up * reference.height
+        let n = axes.normal
+        let c = reference.center
+        return simd_float4x4(columns: (
+            SIMD4<Float>(Float(x.x), Float(x.y), Float(x.z), 0),
+            SIMD4<Float>(Float(y.x), Float(y.y), Float(y.z), 0),
+            SIMD4<Float>(Float(n.x), Float(n.y), Float(n.z), 0),
+            SIMD4<Float>(Float(c.x), Float(c.y), Float(c.z), 1)
+        ))
     }
 
     // MARK: Данные
