@@ -133,7 +133,7 @@ private struct TreeRow: View {
                 Color.clear.frame(width: 12, height: 20)
             }
 
-            Image(systemName: node.kind.symbol)
+            Image(systemName: node.symbol)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(node.tint)
                 .frame(width: 14)
@@ -276,6 +276,16 @@ private struct TreeRow: View {
             if node.kind == .box {
                 Menu("Fillets") {
                     FilletPresetItems(model: model, target: node.id)
+                }
+            }
+            if isGroup {
+                Menu("Joins") {
+                    Button("Sharp") { model.setBlendKind(node.id, nil) }
+                        .disabled(node.blend == nil)
+                    Button("Fillet") { model.setBlendKind(node.id, .fillet) }
+                        .disabled(node.blend?.kind == .fillet)
+                    Button("Chamfer") { model.setBlendKind(node.id, .chamfer) }
+                        .disabled(node.blend?.kind == .chamfer)
                 }
             }
             Divider()

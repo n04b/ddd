@@ -9,6 +9,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 - **Primitives:** box, sphere and cylinder, each with a position, rotation and size.
 - **Solids, holes and masks.** A group is a boolean operation: (union of its solids − union of its holes) ∩ union of its masks. A mask is a 3D clipping mask: only the part of the group inside it remains. Holes and masks only act inside their own group.
 - **Box fillets and chamfers.** Each of the 12 edges can be filleted or get a 45° chamfer, and each of the 8 corners is either auto or cut. You edit them with handles right on the model.
+- **Smooth joins (SDF groups).** A group can fillet or chamfer every edge its boolean operations create — where solids meet, around hole rims, along mask cuts — with one size. Such a group is built from a signed distance field instead of BSP.
 - **Reference images.** A photo, drawing or PDF lies on the top, front or right plane as a backdrop to model over. Its scale comes from the file's DPI and can be calibrated by two points of a known distance; points marked on it show their coordinates in millimeters.
 - **Parametric model.** A project stores parameters, not triangles, so you can change sizes and fillets at any time.
 - **Background computation.** While you drag a value, a draft is shown; the exact geometry is computed when you release.
@@ -105,6 +106,15 @@ How values work:
 
 Presets are in the inspector, in **Object → Fillets** and in the tree's context menu: All Edges, Top + Vertical, Vertical, Top Only, For Printing (45° chamfer on the bottom) and Reset Fillets.
 
+## Smooth joins
+
+Select a group and choose **Fillet** or **Chamfer** in the inspector's **JOINS** row (or **Joins** in the tree's context menu), then set the size. **Sharp** turns it back into an ordinary group; the objects and their parameters are kept. In the tree such a group has a filled icon and its size after the object count: "3 · R2" or "3 · ◢1.5".
+
+- **What is rounded.** Every edge the group's boolean operations create. Where solids meet, material is added into the inner corner; hole rims and mask cuts are rounded off. On a right angle a fillet is an arc of the given radius, and a chamfer is 45° with the given leg.
+- **What is not.** The objects' own edges stay as they are (box fillets still work on them). Faces that are flush with each other, faces that face each other across a gap, and faces that meet only inside overlapping objects get no joint, so stacking boxes flush leaves no ridge, and a bore through a boss and its plate gets no groove at their seam.
+- **Nested groups** inside an SDF group are part of the same field: with their own joins size, or with sharp joins if they have none. To round only one joint, put those objects into their own SDF group.
+- **Mesh.** The field is meshed with a grid step of about a third of the smallest detail (the joint size, box fillets, half the thinnest object), from 0.15 to 0.6 mm. While you drag a value, a draft on a 2.5 times coarser grid is shown. The STL contains the same mesh.
+
 ## Reference images
 
 Import a picture with **File → Import Reference Image…** (⇧⌘I), the photo button in the toolbar, or by dropping a file on the viewport. PNG, JPEG, HEIC, TIFF and the first page of a PDF are supported. The image lies on the plane that faces the camera: the bed in the isometric and top views, the front or right plane in those views. On a vertical plane it stands on the bed.
@@ -162,6 +172,8 @@ DDD/
 │   ├── Tessellator.swift   primitives to polygons
 │   ├── RoundedBox.swift    box fillets, chamfers and corner cuts
 │   ├── CSG.swift           boolean operations on BSP trees
+│   ├── SDF.swift           distance fields of groups with smooth joins
+│   ├── SDFMesher.swift     distance field to triangles (Dual Contouring)
 │   ├── GeometryKernel.swift background computation and cache
 │   ├── Picking.swift       ray picking
 │   ├── Expression.swift    expressions in number fields
@@ -177,6 +189,8 @@ How geometry is computed:
 - **The draft pass** during a drag coarsens fillets and merges a group's solids without boolean operations. Unchanged nodes come from the exact cache.
 - **A filleted box** is convex, so it's built by clipping the box with planes rather than with boolean operations. The resulting mesh is closed.
 - **Boolean operations** are a port of csg.js. Only polygons that touch the other body's bounding box go into the BSP; the rest pass through unchanged.
+- **An SDF group** is evaluated as one distance field carrying its gradient: primitives have exact fields, and union, difference and intersection use the rounded and chamfered formulas from hg_sdf. Before blending, each point is checked at the center of the rolling ball near it, and the joint is dropped where the faces are flush, face each other across a gap, or the nearest "surface" is an inner face of overlapping objects.
+- **Meshing** uses Dual Contouring: one vertex per cell, placed by a QEF solved with a truncated eigen decomposition, so sharp edges and corners stay sharp. Cells are processed in 4×4×4 blocks on all cores, and empty space is skipped by the distance bound.
 
 The kernel in `Core/` doesn't depend on Apple frameworks, so it can later be built for other platforms or replaced with OpenCascade or Manifold.
 
@@ -184,6 +198,9 @@ The kernel in `Core/` doesn't depend on Apple frameworks, so it can later be bui
 
 - Curved surfaces are approximated by polygons with a chord of about 1 mm.
 - Boolean results can contain T-junctions between polygons; slicers usually tolerate them.
-- Fillets exist only on boxes and only on their original edges. Edges created by boolean operations can't be filleted.
+- Fillets exist only on boxes and only on their original edges. Edges created by boolean operations can be filleted only in SDF groups, with one size per group.
+- An SDF group is a fine mesh: flat faces get many triangles. A parent group cuts it with BSP slowly, so keep the holes that cut such a part inside the SDF group itself.
+- In an SDF group, objects closer than about the joint size can be partly bridged at the edge of the gap; a joint on an obtuse corner is larger than a CAD fillet of the same radius; corners where three or more objects meet can show small creases.
+- SDF groups compute about 40 times slower in a Debug build than in Release.
 - There is no soft corner with a variable radius and no curvature-continuous fillet profile.
 - Click selection treats a box as sharp even when it's filleted.

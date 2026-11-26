@@ -119,4 +119,13 @@ extension Node {
         if mode == .mask { return Theme.violet }
         return kind == .group ? Theme.cyan : Theme.emerald
     }
+
+    /// Значок в дереве и инспекторе: у группы с плавными стыками — залитая стопка.
+    var symbol: String {
+        isBlended ? "square.stack.3d.up.fill" : kind.symbol
+    }
+
+    var title: String {
+        isBlended ? "SDF group" : kind.title
+    }
 }

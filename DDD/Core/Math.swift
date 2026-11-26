@@ -196,6 +196,25 @@ nonisolated struct AABB: Sendable, Equatable {
         return result
     }
 
+    func expanded(by margin: Double) -> AABB {
+        guard !isEmpty else { return self }
+        let m = Vec3(margin, margin, margin)
+        return AABB(lo: lo - m, hi: hi + m)
+    }
+
+    func intersection(_ other: AABB) -> AABB {
+        AABB(lo: Vec3(Swift.max(lo.x, other.lo.x), Swift.max(lo.y, other.lo.y), Swift.max(lo.z, other.lo.z)),
+             hi: Vec3(Swift.min(hi.x, other.hi.x), Swift.min(hi.y, other.hi.y), Swift.min(hi.z, other.hi.z)))
+    }
+
+    /// Расстояние от точки до коробки; внутри — ноль.
+    func distance(to p: Vec3) -> Double {
+        let dx = Swift.max(lo.x - p.x, p.x - hi.x, 0)
+        let dy = Swift.max(lo.y - p.y, p.y - hi.y, 0)
+        let dz = Swift.max(lo.z - p.z, p.z - hi.z, 0)
+        return (dx * dx + dy * dy + dz * dz).squareRoot()
+    }
+
     func intersects(_ other: AABB, margin: Double = 1e-6) -> Bool {
         guard !isEmpty, !other.isEmpty else { return false }
         return lo.x <= other.hi.x + margin && hi.x >= other.lo.x - margin

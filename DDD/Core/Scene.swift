@@ -29,6 +29,38 @@ nonisolated enum NodeMode: String, Codable, Hashable, Sendable {
     case mask
 }
 
+/// Чем сопрягаются тела группы на стыках.
+nonisolated enum BlendKind: String, Codable, Hashable, Sendable {
+    case fillet
+    case chamfer
+}
+
+/// Плавные стыки группы. Такая группа считается не BSP, а полем расстояний (SDF):
+/// каждое ребро, которое дают её булевы операции, получает скругление или фаску.
+nonisolated struct GroupBlend: Codable, Hashable, Sendable {
+    /// Радиус скругления или катет фаски, мм.
+    var radius: Double = 2
+    var kind: BlendKind = .fillet
+
+    static let minimumRadius = 0.1
+
+    init(radius: Double = 2, kind: BlendKind = .fillet) {
+        self.radius = radius
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case radius, kind
+    }
+
+    /// Недостающие поля — значения по умолчанию.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        radius = try c.decodeIfPresent(Double.self, forKey: .radius) ?? 2
+        kind = try c.decodeIfPresent(BlendKind.self, forKey: .kind) ?? .fillet
+    }
+}
+
 nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var id: UUID = UUID()
     var name: String
@@ -46,6 +78,8 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var size: Vec3 = Vec3(20, 20, 20)
     /// Скругление рёбер и вершин блока. nil — острые; в старых файлах поля нет.
     var rounding: BoxRounding?
+    /// Плавные стыки детей группы (SDF). nil — обычная группа: BSP и острые стыки.
+    var blend: GroupBlend?
     var children: [Node] = []
 
     static let nilID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
@@ -60,9 +94,14 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
             return dims + " · R\(Fmt.number(r))"
         case .sphere: return "Ø\(Fmt.number(size.x))"
         case .cylinder: return "Ø\(Fmt.number(size.x))×\(Fmt.number(size.z))"
-        case .group: return "\(children.count)"
+        case .group:
+            guard let blend else { return "\(children.count)" }
+            return "\(children.count) · " + (blend.kind == .fillet ? "R" : "◢") + Fmt.number(blend.radius)
         }
     }
+
+    /// Группа считается полем расстояний: со скруглениями или фасками на стыках.
+    var isBlended: Bool { kind == .group && blend != nil }
 
     func withNewIDs() -> Node {
         var copy = self

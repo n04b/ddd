@@ -819,6 +819,36 @@ final class EditorModel {
         }
     }
 
+    // MARK: Стыки групп (SDF)
+
+    /// Стыки группы: nil — острые (BSP), иначе скругление или фаска через поле расстояний.
+    /// Новый стык получает тот же размер, что и пресеты скруглений.
+    func setBlendKind(_ id: UUID, _ kind: BlendKind?) {
+        let radius = roundingRadius
+        mutate { document in
+            document.update(id) { node in
+                guard node.kind == .group else { return }
+                guard let kind else {
+                    node.blend = nil
+                    return
+                }
+                var blend = node.blend ?? GroupBlend(radius: radius)
+                blend.kind = kind
+                node.blend = blend
+            }
+        }
+    }
+
+    func setBlendRadius(_ id: UUID, _ value: Double) {
+        let radius = max(value, GroupBlend.minimumRadius)
+        mutate(coalesce: "blend-\(id)") { document in
+            document.update(id) { node in
+                guard node.kind == .group, node.blend != nil else { return }
+                node.blend?.radius = radius
+            }
+        }
+    }
+
     // MARK: Перемещение во вьюпорте
 
     func beginMove() {

@@ -152,7 +152,11 @@ nonisolated final class GeometryKernel {
         }
 
         let result: [CSGPolygon]
-        if node.kind == .group && draft {
+        if node.isBlended {
+            // Плавные стыки: группа целиком — поле расстояний, сетка строится один раз.
+            // Черновик — та же форма на грубой сетке.
+            result = SDFMesher.polygons(for: node, draft: draft)
+        } else if node.kind == .group && draft {
             // Тела просто складываются, отверстия и маски видны поверх рентгеном.
             result = node.children
                 .filter { $0.visible && $0.mode == .solid }
