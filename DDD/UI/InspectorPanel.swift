@@ -130,6 +130,10 @@ private struct NodeInspector: View {
                 roundingSection
             }
 
+            if node.kind == .group {
+                joinsSection
+            }
+
             actions
         }
         .onAppear { name = node.name }
@@ -138,7 +142,7 @@ private struct NodeInspector: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: node.kind.symbol)
+            Image(systemName: node.symbol)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(node.tint)
                 .frame(width: 18)
@@ -152,7 +156,7 @@ private struct NodeInspector: View {
                     .onChange(of: nameFocused) { _, focused in
                         if !focused { model.rename(node.id, name) }
                     }
-                Text(node.kind.title)
+                Text(node.title)
                     .font(Theme.label(10))
                     .foregroundStyle(Theme.tertiary)
             }
@@ -253,6 +257,28 @@ private struct NodeInspector: View {
 
             if editing {
                 Text("Drag a handle into the body. ⇧-click adds, double-click picks parallel edges, a face click picks its 4 edges, ⌥ — all. Type a number to enter it. Esc — done.")
+                    .font(Theme.label(10.5))
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Стыки группы: острые (BSP) или скругление и фаска на каждом стыке через поле расстояний.
+    private var joinsSection: some View {
+        let id = node.id
+        return section("JOINS") {
+            JoinSwitch(kind: node.blend?.kind) { model.setBlendKind(id, $0) }
+            if let blend = node.blend {
+                NumberField(label: blend.kind == .fillet ? "R" : "◢", labelColor: Theme.secondary,
+                            value: blend.radius, unit: "mm", dragStep: 0.1, keyStep: 0.5,
+                            minimum: GroupBlend.minimumRadius,
+                            onChange: { model.setBlendRadius(id, $0) },
+                            onFinish: { model.breakCoalescing() })
+                Text((blend.kind == .fillet ? "Every edge where the group's objects meet is rounded"
+                                            : "Every edge where the group's objects meet gets a chamfer")
+                     + ". The group is built from a distance field, so its faces become a fine mesh, "
+                     + "and objects closer than the size may merge.")
                     .font(Theme.label(10.5))
                     .foregroundStyle(Theme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -428,6 +454,39 @@ struct ModeSwitch: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 24)
                 .background(Capsule().fill(active ? color.opacity(0.16) : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Переключатель стыков группы: острые, скругление, фаска.
+struct JoinSwitch: View {
+    let kind: BlendKind?
+    let onChange: (BlendKind?) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment("Sharp", nil)
+            segment("Fillet", .fillet)
+            segment("Chamfer", .chamfer)
+        }
+        .padding(2)
+        .background(Capsule().fill(Theme.field))
+        .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+
+    private func segment(_ title: String, _ value: BlendKind?) -> some View {
+        let active = kind == value
+        return Button {
+            onChange(value)
+        } label: {
+            Text(title)
+                .font(Theme.label(11.5, .medium))
+                .foregroundStyle(active ? Theme.cyan : Theme.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+                .background(Capsule().fill(active ? Theme.cyan.opacity(0.16) : Color.clear))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
