@@ -96,9 +96,44 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
 nonisolated struct SceneDocument: Codable, Hashable, Sendable {
     var version: Int = 1
     var nodes: [Node] = []
+    /// Референс-изображения: подложки для построения, в деталь не входят.
+    var references: [ReferenceImage] = []
 
-    init(nodes: [Node] = []) {
+    init(nodes: [Node] = [], references: [ReferenceImage] = []) {
         self.nodes = nodes
+        self.references = references
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, nodes, references
+    }
+
+    /// В старых файлах нет референсов.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        nodes = try c.decode([Node].self, forKey: .nodes)
+        references = try c.decodeIfPresent([ReferenceImage].self, forKey: .references) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(nodes, forKey: .nodes)
+        if !references.isEmpty {
+            try c.encode(references, forKey: .references)
+        }
+    }
+
+    // MARK: Референсы
+
+    func reference(_ id: UUID) -> ReferenceImage? {
+        references.first { $0.id == id }
+    }
+
+    mutating func updateReference(_ id: UUID, _ body: (inout ReferenceImage) -> Void) {
+        guard let index = references.firstIndex(where: { $0.id == id }) else { return }
+        body(&references[index])
     }
 
     // MARK: Поиск

@@ -12,11 +12,17 @@
 //  ⇧ — добавить, двойной клик — параллельные рёбра, ⌥ — все рёбра или вершины,
 //  клик по грани — её 4 ребра, тянуть ручку внутрь — значение. Esc — выход.
 //
+//  Референс-изображения: клик по картинке — как по пустому месту, двойной клик выделяет её,
+//  клик по точке разметки выделяет картинку и точку. Выделенную картинку тянут по её
+//  плоскости. P — ставить точки, R — калибровка по двум точкам. Файл картинки можно
+//  бросить на вьюпорт.
+//
 
 import SwiftUI
 import MetalKit
 import AppKit
 import simd
+import UniformTypeIdentifiers
 
 struct ViewportView: NSViewRepresentable {
     let model: EditorModel
@@ -32,8 +38,13 @@ struct ViewportView: NSViewRepresentable {
         _ = model.filletTarget
         _ = model.filletSelection
         _ = model.outlineMode
+        _ = model.selectedReference
+        _ = model.markerSelection
+        _ = model.referenceTool
+        _ = model.calibrationPoints
         view.needsDisplay = true
         view.overlay.needsDisplay = true
+        view.referenceOverlay.needsDisplay = true
     }
 }
 
@@ -45,6 +56,10 @@ final class ViewportNSView: MTKView {
         case deselectOrOrbit
         case move(anchor: Vec3, vertical: Bool)
         case fillet(origin: NSPoint, inward: CGVector, element: FilletElement)
+        /// Картинку тянут по её плоскости.
+        case referenceMove(anchor: Vec3, normal: Vec3)
+        /// Точку разметки тянут по плоскости её картинки.
+        case marker(MarkerRef)
     }
 
     private let model: EditorModel
@@ -53,7 +68,12 @@ final class ViewportNSView: MTKView {
     private var mouseDownPoint: NSPoint = .zero
     private var dragged = false
     let overlay = FilletOverlayView()
+    let referenceOverlay = ReferenceOverlayView()
     private var valueField: NSTextField?
+    /// Поле длины при калибровке: висит над серединой линейки.
+    private var calibrationField: NSTextField?
+    /// Курсор-перекрестие поставлен нами — его надо вернуть.
+    private var crosshair = false
     /// Повторный клик в ту же точку перебирает наложившиеся ручки.
     private var lastHandleClick: (point: NSPoint, index: Int)?
 
@@ -71,13 +91,20 @@ final class ViewportNSView: MTKView {
         layer?.isOpaque = false
         renderer = Renderer(view: self, model: model)
         delegate = renderer
+        referenceOverlay.model = model
+        referenceOverlay.frame = bounds
+        referenceOverlay.autoresizingMask = [.width, .height]
+        addSubview(referenceOverlay)
         overlay.model = model
         overlay.frame = bounds
         overlay.autoresizingMask = [.width, .height]
         addSubview(overlay)
+        registerForDraggedTypes([.fileURL])
         model.redrawHandler = { [weak self] in
             self?.needsDisplay = true
             self?.overlay.needsDisplay = true
+            self?.referenceOverlay.needsDisplay = true
+            self?.positionCalibrationField()
         }
     }
 
@@ -105,11 +132,12 @@ final class ViewportNSView: MTKView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        updateReferenceHover(at: point)
         guard model.activeFilletNode != nil else {
             if overlay.hovered != nil { overlay.hovered = nil; overlay.needsDisplay = true }
             return
         }
-        let point = convert(event.locationInWindow, from: nil)
         overlay.cursor = point
         overlay.hovered = FilletScene.build(model, size: bounds.size)?.handles(at: point).first?.element
         overlay.needsDisplay = true
@@ -119,16 +147,30 @@ final class ViewportNSView: MTKView {
         overlay.hovered = nil
         overlay.cursor = nil
         overlay.needsDisplay = true
+        referenceOverlay.hovered = nil
+        referenceOverlay.cursor = nil
+        referenceOverlay.needsDisplay = true
+        setCrosshair(false)
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
         mouseDownPoint = point
         dragged = false
         let flags = event.modifierFlags
 
+        // Открыто поле длины калибровки: вьюпорт можно только вращать, фокус остаётся в поле.
+        if calibrationField != nil {
+            dragMode = flags.contains(.shift) ? .pan : .orbit
+            return
+        }
+        window?.makeFirstResponder(self)
+
         if model.activeFilletNode != nil, filletMouseDown(event, at: point) {
+            return
+        }
+
+        if referenceMouseDown(event, at: point) {
             return
         }
 
@@ -176,6 +218,17 @@ final class ViewportNSView: MTKView {
             let length2 = inward.dx * inward.dx + inward.dy * inward.dy
             let delta = ((point.x - origin.x) * inward.dx + (point.y - origin.y) * inward.dy) / max(length2, 1e-6)
             model.updateFilletDrag(delta: Double(delta), step: event.modifierFlags.contains(.shift) ? 1 : 0.5)
+        case let .referenceMove(anchor, normal):
+            if let hit = ViewportNSView.intersect(worldRay(point), planePoint: anchor, normal: normal, minimumCosine: 0.02) {
+                model.updateReferenceMove(worldDelta: hit - anchor, snap: !event.modifierFlags.contains(.option))
+            }
+        case let .marker(ref):
+            let ray = worldRay(point)
+            // Почти вдоль плоскости пересечение улетает в бесконечность — такие шаги пропускаем.
+            if let reference = model.doc.reference(ref.reference), abs(ray.dir.dot(reference.axes.normal)) > 0.02,
+               let hit = reference.planeHit(ray) {
+                model.moveMarker(ref.marker, in: ref.reference, to: hit.pixel)
+            }
         case .orbit, .deselectOrOrbit:
             dragMode = .orbit
             model.camera.orbit(dx: Float(event.deltaX), dy: Float(event.deltaY))
@@ -197,6 +250,10 @@ final class ViewportNSView: MTKView {
                 overlay.dragging = nil
                 model.endFilletDrag()
             }
+        case .referenceMove:
+            model.endReferenceMove()
+        case .marker:
+            model.breakCoalescing()
         case .deselectOrOrbit:
             // Клик по пустому месту в режиме скруглений — выход из режима, блок остаётся выделен.
             if !dragged {
@@ -258,6 +315,10 @@ final class ViewportNSView: MTKView {
         let step: Double = flags.contains(.shift) ? 10 : (flags.contains(.option) ? 0.1 : 1)
 
         if model.activeFilletNode != nil, filletKeyDown(event, flags: flags) {
+            return
+        }
+
+        if referenceKeyDown(event, flags: flags) {
             return
         }
 
@@ -386,10 +447,13 @@ final class ViewportNSView: MTKView {
         return true
     }
 
-    /// ⌘A из меню Edit: в режиме скруглений — все 12 рёбер.
+    /// ⌘A из меню Edit: в режиме скруглений — все 12 рёбер, у выделенной картинки — все её точки.
     override func selectAll(_ sender: Any?) {
-        guard model.activeFilletNode != nil else { return }
-        model.selectFillet((0..<12).map { .edge($0) }, extend: false)
+        if model.activeFilletNode != nil {
+            model.selectFillet((0..<12).map { .edge($0) }, extend: false)
+        } else if model.selectedReference != nil {
+            model.selectAllMarkers()
+        }
     }
 
     /// true — клавиша разобрана режимом скруглений.
@@ -490,15 +554,220 @@ final class ViewportNSView: MTKView {
         menu.popUp(positioning: nil, at: point, in: self)
     }
 
+    // MARK: Референсы
+
+    /// true — клик разобран картинкой: её инструментом, точкой разметки или самой картинкой.
+    private func referenceMouseDown(_ event: NSEvent, at point: NSPoint) -> Bool {
+        let flags = event.modifierFlags
+        let extend = flags.contains(.shift) || flags.contains(.command)
+        let ray = worldRay(point)
+        let marker = ReferenceOverlayView.marker(at: point, in: model, size: bounds.size)
+        let navigate: DragMode = flags.contains(.shift) ? .pan : .orbit
+
+        // Инструменты работают по выделенной картинке и сквозь тела: картинка часто под ними.
+        if model.referenceTool != .none, let reference = model.selectedReferenceImage {
+            let own = marker?.reference == reference.id ? marker : nil
+            let hit = reference.planeHit(ray).flatMap { reference.contains($0.pixel) ? $0 : nil }
+            switch model.referenceTool {
+            case .points:
+                if let own {
+                    model.selectMarker(own.marker, extend: extend)
+                    dragMode = model.markerSelection.contains(own.marker) ? .marker(own) : .none
+                } else if let hit, let id = model.addMarker(at: hit.pixel) {
+                    // Поставили — и сразу можно поправить, не отпуская кнопку.
+                    dragMode = .marker(MarkerRef(reference: reference.id, marker: id))
+                } else {
+                    dragMode = navigate
+                }
+            case .calibrate:
+                // Конец линейки прилипает к точке разметки: калибровать можно по поставленным точкам.
+                if let own, let snapped = reference.markers.first(where: { $0.id == own.marker }) {
+                    model.addCalibrationPoint(snapped.point)
+                } else if let hit {
+                    model.addCalibrationPoint(hit.pixel)
+                } else {
+                    dragMode = navigate
+                    return true
+                }
+                dragMode = .none
+                if model.calibrationPoints.count == 2 {
+                    beginCalibrationEntry()
+                }
+            case .none:
+                break
+            }
+            return true
+        }
+
+        // Точка любой видимой картинки: выделить картинку и точку, дальше — тянуть точку.
+        if let marker {
+            if model.selectedReference != marker.reference {
+                model.selectReference(marker.reference, marker: marker.marker)
+            } else {
+                model.selectMarker(marker.marker, extend: extend)
+            }
+            dragMode = model.markerSelection.contains(marker.marker) ? .marker(marker) : .none
+            return true
+        }
+
+        let nodeHit = model.pick(ray)
+        let nodeDistance = nodeHit.map { ($0.point - ray.origin).length } ?? .infinity
+
+        // Выделенная картинка, если она ближе тел, двигается по своей плоскости.
+        if let reference = model.selectedReferenceImage, !reference.locked,
+           let hit = reference.planeHit(ray), reference.contains(hit.pixel), hit.t < nodeDistance {
+            if !model.markerSelection.isEmpty { model.selectMarkers([]) }
+            model.beginReferenceMove(reference.id)
+            dragMode = .referenceMove(anchor: hit.point, normal: reference.axes.normal)
+            return true
+        }
+
+        // Двойной клик по картинке там, где нет тел, — выделить её.
+        if nodeHit == nil, event.clickCount >= 2, let reference = model.pickReference(ray) {
+            model.selectReference(reference.id)
+            dragMode = .none
+            return true
+        }
+        return false
+    }
+
+    /// true — клавиша разобрана инструментами референсов.
+    private func referenceKeyDown(_ event: NSEvent, flags: NSEvent.ModifierFlags) -> Bool {
+        if event.keyCode == 53, model.referenceTool != .none {
+            model.setReferenceTool(.none)
+            return true
+        }
+        guard model.selectedReference != nil, !flags.contains(.command), !flags.contains(.control) else { return false }
+        switch event.keyCode {
+        case 35: // P
+            model.setReferenceTool(model.referenceTool == .points ? .none : .points)
+            return true
+        case 15: // R
+            model.setReferenceTool(model.referenceTool == .calibrate ? .none : .calibrate)
+            return true
+        case 53 where !model.markerSelection.isEmpty:
+            model.selectMarkers([])
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Подсветка точки под курсором и перекрестие над картинкой, пока включён инструмент.
+    private func updateReferenceHover(at point: NSPoint) {
+        let marker = ReferenceOverlayView.marker(at: point, in: model, size: bounds.size)
+        let tool = model.referenceTool != .none
+        if marker != referenceOverlay.hovered || marker != nil || tool {
+            referenceOverlay.hovered = marker
+            referenceOverlay.cursor = point
+            referenceOverlay.needsDisplay = true
+        }
+        var overImage = false
+        if tool, let reference = model.selectedReferenceImage, let hit = reference.planeHit(worldRay(point)) {
+            overImage = reference.contains(hit.pixel)
+        }
+        setCrosshair(overImage && marker == nil)
+    }
+
+    private func setCrosshair(_ on: Bool) {
+        if on {
+            NSCursor.crosshair.set()
+        } else if crosshair {
+            NSCursor.arrow.set()
+        }
+        crosshair = on
+    }
+
+    /// Поле длины над серединой линейки: число уже набрано в текущем масштабе и выделено.
+    private func beginCalibrationEntry() {
+        guard calibrationField == nil, let reference = model.selectedReferenceImage,
+              model.calibrationPoints.count == 2 else { return }
+        let length = model.calibrationPoints[0].distance(to: model.calibrationPoints[1]) * reference.mmPerPixel
+        let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 96, height: 22))
+        field.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        field.textColor = .white
+        field.backgroundColor = NSColor(white: 0.16, alpha: 1)
+        field.drawsBackground = true
+        field.isBordered = false
+        field.focusRingType = .none
+        field.placeholderString = "mm"
+        field.stringValue = Fmt.number(length)
+        field.toolTip = "The real distance between the two points, mm. Return — apply, Esc — cancel"
+        field.delegate = self
+        addSubview(field)
+        calibrationField = field
+        referenceOverlay.editingLength = true
+        positionCalibrationField()
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    /// Поле следует за линейкой, когда вращают камеру; без калибровки оно закрывается.
+    private func positionCalibrationField() {
+        guard let field = calibrationField else { return }
+        guard model.referenceTool == .calibrate, model.calibrationPoints.count == 2,
+              let reference = model.selectedReferenceImage else {
+            closeCalibrationField()
+            return
+        }
+        let view = ViewportGeometry(camera: model.camera, size: bounds.size)
+        guard let a = view.project(reference.world(model.calibrationPoints[0])),
+              let b = view.project(reference.world(model.calibrationPoints[1])) else { return }
+        var frame = field.frame
+        frame.origin = CGPoint(x: (a.x + b.x) / 2 - frame.width / 2, y: (a.y + b.y) / 2 + 12)
+        frame.origin.x = min(max(frame.origin.x, 6), bounds.width - frame.width - 6)
+        frame.origin.y = min(max(frame.origin.y, 6), bounds.height - frame.height - 6)
+        field.frame = frame
+    }
+
+    fileprivate func finishCalibrationEntry(commit: Bool) {
+        guard let field = calibrationField else { return }
+        if commit {
+            guard let value = ExpressionEvaluator.evaluate(field.stringValue), value > 0 else {
+                NSSound.beep()
+                return
+            }
+            closeCalibrationField()
+            model.finishCalibration(value)
+        } else {
+            closeCalibrationField()
+            model.setReferenceTool(.none)
+        }
+    }
+
+    private func closeCalibrationField() {
+        guard let field = calibrationField else { return }
+        calibrationField = nil
+        referenceOverlay.editingLength = false
+        field.removeFromSuperview()
+        window?.makeFirstResponder(self)
+    }
+
+    // MARK: Перетаскивание файлов
+
+    private func droppedImages(_ info: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+            .urlReadingContentsConformToTypes: [UTType.image.identifier, UTType.pdf.identifier],
+        ]
+        return info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        droppedImages(sender).isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = droppedImages(sender)
+        guard !urls.isEmpty else { return false }
+        model.importReferenceImages(urls)
+        return true
+    }
+
     // MARK: Геометрия экрана
 
     private func worldRay(_ point: NSPoint) -> Ray {
-        let width = max(bounds.width, 1)
-        let height = max(bounds.height, 1)
-        let ndc = SIMD2<Float>(Float(point.x / width * 2 - 1), Float(point.y / height * 2 - 1))
-        let ray = model.camera.ray(ndc: ndc, aspect: Float(width / height))
-        return Ray(origin: Vec3(Double(ray.origin.x), Double(ray.origin.y), Double(ray.origin.z)),
-                   dir: Vec3(Double(ray.direction.x), Double(ray.direction.y), Double(ray.direction.z)))
+        ViewportGeometry(camera: model.camera, size: bounds.size).ray(point)
     }
 
     private func moveDelta(to point: NSPoint, anchor: Vec3, vertical: Bool) -> Vec3? {
@@ -514,9 +783,10 @@ final class ViewportNSView: MTKView {
         return Vec3(hit.x - anchor.x, hit.y - anchor.y, 0)
     }
 
-    private static func intersect(_ ray: Ray, planePoint: Vec3, normal: Vec3) -> Vec3? {
+    /// minimumCosine — насколько луч должен не лежать в плоскости: почти вдоль неё точка улетает.
+    private static func intersect(_ ray: Ray, planePoint: Vec3, normal: Vec3, minimumCosine: Double = 0) -> Vec3? {
         let denom = ray.dir.dot(normal)
-        guard abs(denom) > 1e-9 else { return nil }
+        guard abs(denom) > max(1e-9, minimumCosine) else { return nil }
         let t = (planePoint - ray.origin).dot(normal) / denom
         guard t > 0 else { return nil }
         return ray.origin + ray.dir * t
@@ -525,18 +795,21 @@ final class ViewportNSView: MTKView {
 
 extension ViewportNSView: NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        // Поле длины калибровки применяется только по Return: потеря фокуса его не закрывает.
+        let calibration = control === calibrationField
         if selector == #selector(NSResponder.cancelOperation(_:)) {
-            finishValueEntry(commit: false)
+            if calibration { finishCalibrationEntry(commit: false) } else { finishValueEntry(commit: false) }
             return true
         }
         if selector == #selector(NSResponder.insertNewline(_:)) {
-            finishValueEntry(commit: true)
+            if calibration { finishCalibrationEntry(commit: true) } else { finishValueEntry(commit: true) }
             return true
         }
         return false
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
+        guard (obj.object as AnyObject?) !== calibrationField else { return }
         finishValueEntry(commit: true)
     }
 }
