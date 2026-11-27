@@ -29,6 +29,42 @@ nonisolated enum NodeMode: String, Codable, Hashable, Sendable {
     case mask
 }
 
+/// Операции SDF-группы сверх тела, отверстия и маски — как в SDF Modeler.
+/// Действуют на то, что выше в списке группы; величина — strength объекта, мм.
+nonisolated enum BlendEffect: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Объект вставляется с зазором: тела выше раздвигаются вокруг него на strength.
+    case push
+    /// Объект обходит тела выше, оставляя зазор strength.
+    case avoid
+    /// Поверхность тел выше поднимается на strength там, где её накрывает объект.
+    case emboss
+    /// Поверхность тел выше вдавливается на strength там, где её накрывает объект.
+    case deboss
+    /// Внутри объекта от тел выше остаётся стенка толщиной strength, снаружи — ничего.
+    case shell
+
+    static let defaultStrength = 1.0
+
+    var title: String {
+        switch self {
+        case .push: return "Push"
+        case .avoid: return "Avoid"
+        case .emboss: return "Emboss"
+        case .deboss: return "Deboss"
+        case .shell: return "Shell"
+        }
+    }
+
+    /// Режим, которым объект показывается и считается вне SDF-группы.
+    var mode: NodeMode {
+        switch self {
+        case .push, .avoid, .emboss: return .solid
+        case .deboss: return .hole
+        case .shell: return .mask
+        }
+    }
+}
+
 /// Чем сопрягаются тела группы на стыках.
 nonisolated enum BlendKind: String, Codable, Hashable, Sendable {
     case fillet
@@ -78,8 +114,12 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var size: Vec3 = Vec3(20, 20, 20)
     /// Скругление рёбер и вершин блока. nil — острые; в старых файлах поля нет.
     var rounding: BoxRounding?
-    /// Плавные стыки детей группы (SDF). nil — обычная группа: BSP и острые стыки.
+    /// Плавные стыки детей группы (SDF). nil — острые стыки.
     var blend: GroupBlend?
+    /// Операция в SDF-группе сверх режима (Push, Avoid, ...). nil — по режиму: тело, отверстие, маска.
+    var effect: BlendEffect?
+    /// Зазор, высота, глубина или толщина стенки операции, мм. nil — по умолчанию.
+    var strength: Double?
     var children: [Node] = []
 
     static let nilID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
@@ -87,6 +127,11 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
     var pose: Pose { Pose(position: position, rotationDegrees: rotation) }
 
     var summary: String {
+        guard let effect else { return shapeSummary }
+        return shapeSummary + " · " + effect.title + " " + Fmt.number(effectStrength)
+    }
+
+    private var shapeSummary: String {
         switch kind {
         case .box:
             let dims = "\(Fmt.number(size.x))×\(Fmt.number(size.y))×\(Fmt.number(size.z))"
@@ -100,8 +145,14 @@ nonisolated struct Node: Codable, Hashable, Sendable, Identifiable {
         }
     }
 
-    /// Группа считается полем расстояний: со скруглениями или фасками на стыках.
-    var isBlended: Bool { kind == .group && blend != nil }
+    /// Величина операции, мм.
+    var effectStrength: Double { max(strength ?? BlendEffect.defaultStrength, 0) }
+
+    /// Группа считается полем расстояний: со скруглениями или фасками на стыках,
+    /// или если кто-то из детей задаёт операцию Push, Avoid, ... (тогда стыки острые).
+    var isBlended: Bool {
+        kind == .group && (blend != nil || children.contains { $0.visible && $0.effect != nil })
+    }
 
     func withNewIDs() -> Node {
         var copy = self

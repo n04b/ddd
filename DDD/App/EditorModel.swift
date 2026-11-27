@@ -496,7 +496,10 @@ final class EditorModel {
     func setMode(_ ids: [UUID], _ mode: NodeMode) {
         mutate { document in
             for id in ids {
-                document.update(id) { node in node.mode = mode }
+                document.update(id) { node in
+                    node.mode = mode
+                    node.effect = nil
+                }
             }
         }
         if mode == .hole, ids.contains(where: { isTopLevel($0) }) {
@@ -837,6 +840,31 @@ final class EditorModel {
                 node.blend = blend
             }
         }
+    }
+
+    /// Операция объекта в группе (Push, Avoid, ...). Группа с такими детьми считается полем
+    /// расстояний; вне SDF-группы объект ведёт себя по режиму операции.
+    func setEffect(_ ids: [UUID], _ effect: BlendEffect) {
+        mutate { document in
+            for id in ids {
+                document.update(id) { node in
+                    node.effect = effect
+                    node.mode = effect.mode
+                }
+            }
+        }
+    }
+
+    func setStrength(_ id: UUID, _ value: Double) {
+        let strength = max(value, 0.05)
+        mutate(coalesce: "strength-\(id)") { document in
+            document.update(id) { node in node.strength = strength }
+        }
+    }
+
+    /// Группа, в которой лежит узел; nil — узел на верхнем уровне.
+    func parentGroup(of id: UUID) -> Node? {
+        doc.parentID(of: id).flatMap { doc.node($0) }
     }
 
     func setBlendRadius(_ id: UUID, _ value: Double) {

@@ -31,9 +31,9 @@ nonisolated enum SDFMesher {
 
     static func polygons(for group: Node, draft: Bool) -> [CSGPolygon] {
         guard let compiled = SDF.compile(group), !compiled.bounds.isEmpty else { return [] }
-        // Радиус стыка меняется от точки к точке, и поле может уйти от расстояния на долю
-        // радиуса: до 0,41·r у скругления и до 0,71·r у фаски. На столько же расширяем
-        // полосу вокруг поверхности, иначе блок с поверхностью можно пропустить.
+        // Сглаженные операции уводят поле от расстояния на долю размера стыка k
+        // (гладкий максимум — до k/4 вверх). С запасом расширяем полосу вокруг
+        // поверхности, иначе блок с поверхностью можно пропустить.
         return mesh(compiled.field, bounds: compiled.bounds, step: step(for: compiled, draft: draft),
                     slack: 0.75 * compiled.largestBlend)
     }
