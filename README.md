@@ -9,7 +9,7 @@ Version 0.1.2. Units are millimeters, and Z points up, as on a printer.
 - **Primitives:** box, sphere and cylinder, each with a position, rotation and size.
 - **Solids, holes and masks.** A group is a boolean operation: (union of its solids − union of its holes) ∩ union of its masks. A mask is a 3D clipping mask: only the part of the group inside it remains. Holes and masks only act inside their own group.
 - **Box fillets and chamfers.** Each of the 12 edges can be filleted or get a 45° chamfer, and each of the 8 corners is either auto or cut. You edit them with handles right on the model.
-- **Smooth joins (SDF groups).** A group can fillet or chamfer every edge its boolean operations create — where solids meet, around hole rims, along mask cuts — with one size. Such a group is built from a signed distance field instead of BSP.
+- **Smooth joins and blend operations (SDF groups).** A group can fillet or chamfer every edge its boolean operations create — where solids meet, around hole rims, along mask cuts — with one size. Its objects can also Push, Avoid, Emboss, Deboss or Shell the objects above them, as in SDF Modeler. Such a group is built from a signed distance field instead of BSP.
 - **Reference images.** A photo, drawing or PDF lies on the top, front or right plane as a backdrop to model over. Its scale comes from the file's DPI and can be calibrated by two points of a known distance; points marked on it show their coordinates in millimeters.
 - **Parametric model.** A project stores parameters, not triangles, so you can change sizes and fillets at any time.
 - **Background computation.** While you drag a value, a draft is shown; the exact geometry is computed when you release.
@@ -110,8 +110,17 @@ Presets are in the inspector, in **Object → Fillets** and in the tree's contex
 
 Select a group and choose **Fillet** or **Chamfer** in the inspector's **JOINS** row (or **Joins** in the tree's context menu), then set the size. **Sharp** turns it back into an ordinary group; the objects and their parameters are kept. In the tree such a group has a filled icon and its size after the object count: "3 · R2" or "3 · ◢1.5".
 
-- **What is rounded.** Every edge the group's boolean operations create. Where solids meet, material is added into the inner corner; hole rims and mask cuts are rounded off. On a right angle a fillet is an arc of the given radius, and a chamfer is 45° with the given leg.
-- **What is not.** The objects' own edges stay as they are (box fillets still work on them). Faces that are flush with each other, faces that face each other across a gap, and faces that meet only inside overlapping objects get no joint, so stacking boxes flush leaves no ridge, and a bore through a boss and its plate gets no groove at their seam.
+- **Order matters.** As in SDF Modeler, the objects of an SDF group apply top to bottom: each one acts on what the objects above it in the tree have made. A hole above every solid cuts nothing; drag it below them.
+- **What is rounded.** Every edge the group's operations create. Where solids meet, material is added into the inner corner; hole rims and mask cuts are rounded off. A fillet is a smooth blend that reaches the given size along each face of a right angle; a chamfer is a 45° cut with the given leg.
+- **What is not.** The objects' own edges stay as they are (box fillets still work on them).
+- **Blend operations.** Select an object inside a group: next to **Solid**, **Hole** and **Mask** (Union, Subtract and Intersect in SDF Modeler) the inspector offers five operations, each with its own size:
+  - **Push** — the object is inserted with a gap: the objects above are cut back around it by **Gap**. Good for print-in-place parts.
+  - **Avoid** — the object is cut back by **Gap** around the objects above, which stay as they are.
+  - **Emboss** — the surface of the objects above is raised by **Height** where the object covers it.
+  - **Deboss** — the surface of the objects above is engraved by **Depth** where the object covers it.
+  - **Shell** — inside the object the objects above become a hollow wall of thickness **Wall**; outside it nothing remains.
+
+  A group with such an object is an SDF group even with **Sharp** joins. Outside an SDF group the object acts as a solid (Push, Avoid, Emboss), a hole (Deboss) or a mask (Shell). Paint from SDF Modeler is not here: objects have no colours.
 - **Nested groups** inside an SDF group are part of the same field: with their own joins size, or with sharp joins if they have none. To round only one joint, put those objects into their own SDF group.
 - **Mesh.** The field is meshed with a grid step of about a third of the smallest detail (the joint size, box fillets, half the thinnest object), from 0.15 to 0.6 mm. While you drag a value, a draft on a 2.5 times coarser grid is shown. The STL contains the same mesh.
 
@@ -189,7 +198,7 @@ How geometry is computed:
 - **The draft pass** during a drag coarsens fillets and merges a group's solids without boolean operations. Unchanged nodes come from the exact cache.
 - **A filleted box** is convex, so it's built by clipping the box with planes rather than with boolean operations. The resulting mesh is closed.
 - **Boolean operations** are a port of csg.js. Only polygons that touch the other body's bounding box go into the BSP; the rest pass through unchanged.
-- **An SDF group** is evaluated as one distance field carrying its gradient: primitives have exact fields, and union, difference and intersection use the rounded and chamfered formulas from hg_sdf. Before blending, each point is checked at the center of the rolling ball near it, and the joint is dropped where the faces are flush, face each other across a gap, or the nearest "surface" is an inner face of overlapping objects.
+- **An SDF group** is evaluated as one distance field carrying its gradient, child after child, as SDF Modeler does: primitives have exact fields, union is the quadratic smooth minimum by Inigo Quilez (or a 45° chamfer plane), difference and intersection are the same through negation, and Push, Avoid, Emboss, Deboss and Shell are built from them and offsets of the field. Every formula is continuous, so the mesh has no tears.
 - **Meshing** uses Dual Contouring: one vertex per cell, placed by a QEF solved with a truncated eigen decomposition, so sharp edges and corners stay sharp. Cells are processed in 4×4×4 blocks on all cores, and empty space is skipped by the distance bound.
 
 The kernel in `Core/` doesn't depend on Apple frameworks, so it can later be built for other platforms or replaced with OpenCascade or Manifold.
@@ -200,7 +209,7 @@ The kernel in `Core/` doesn't depend on Apple frameworks, so it can later be bui
 - Boolean results can contain T-junctions between polygons; slicers usually tolerate them.
 - Fillets exist only on boxes and only on their original edges. Edges created by boolean operations can be filleted only in SDF groups, with one size per group.
 - An SDF group is a fine mesh: flat faces get many triangles. A parent group cuts it with BSP slowly, so keep the holes that cut such a part inside the SDF group itself.
-- In an SDF group, objects closer than about the joint size can be partly bridged at the edge of the gap; a joint on an obtuse corner is larger than a CAD fillet of the same radius; corners where three or more objects meet can show small creases.
+- In an SDF group, objects closer than the joint size merge with a smooth web, faces flush with each other get a low ridge along their seam, and a fillet is a smooth blend rather than an exact circular arc.
 - SDF groups compute about 40 times slower in a Debug build than in Release.
 - There is no soft corner with a variable radius and no curvature-continuous fillet profile.
 - Click selection treats a box as sharp even when it's filleted.

@@ -3,28 +3,21 @@
 //  Поле расстояний со знаком (SDF) для группы с плавными стыками.
 //  Меньше нуля — внутри тела, больше — снаружи, ноль — поверхность.
 //
-//  Группа считается по тем же правилам, что и BSP-группа: тела объединяются,
-//  отверстия вычитаются, маски пересекаются. Скруглённые версии этих операций
-//  (формулы из библиотеки hg_sdf) дают на каждом стыке скругление радиусом r
-//  или фаску с катетом r; на прямом угле — ровно дугу и ровно 45°.
-//
-//  Обычное скругление расстояний не отличает внутренний угол от двух граней
-//  заподлицо: там тоже оба расстояния малы, и вдоль шва вырастает валик. Поэтому
-//  стык проверяется в центре «катящегося шара» — точке в r от обоих тел рядом
-//  с данной. Радиус полный везде, кроме трёх случаев, где стыка на самом деле нет:
-//  • «открытость»: основание перпендикуляра из центра на одно тело должно быть
-//    так же далеко от другого тела, как сам центр. В настоящем внутреннем углу это так,
-//    у граней заподлицо основание лежит прямо на другом теле, а у зазора — дальше;
-//  • грани строго лицом к лицу (узкий зазор между телами);
-//  • основания должны лежать на настоящей поверхности, а не на внутренней грани
-//    тел внахлёст, где поле — лишь оценка.
-//  Центр шара один на весь стык, поэтому радиус не скачет поперёк скругления.
+//  Группа считается как в SDF Modeler: дети применяются по порядку, сверху вниз,
+//  и каждый своей операцией вливается в то, что получилось из детей выше:
+//  • тело — объединение, отверстие — вычитание, маска — пересечение;
+//  • Push, Avoid, Emboss, Deboss, Shell — операции с величиной strength:
+//    зазор, высота рельефа, глубина гравировки, толщина стенки.
+//  Стык сглаживается на размер k группы: скругление — гладкий минимум Иниго Квилеса
+//  (полином второй степени), фаска — плоскость под 45° с катетом k. Обе формулы
+//  непрерывны везде, поэтому сетка не рвётся; цена — тела ближе k друг к другу
+//  срастаются перемычкой, а на гранях заподлицо вдоль шва вырастает невысокий валик.
 //
 //  Поля примитивов точные. Скругления и фаски рёбер блока повторяют RoundedBox:
 //  тот же блок, срезанный цилиндрами рёбер, плоскостями фасок, сферами «авто»-вершин
 //  и плоскостями срезов вершин.
 //
-//  Вложенные группы тоже становятся полями, со своим радиусом или с острыми стыками.
+//  Вложенные группы тоже становятся полями, со своим размером стыков или с острыми.
 //  Сетку из поля строит SDFMesher.
 //
 
@@ -36,10 +29,13 @@ nonisolated struct FieldSample {
     var g: Vec3
 
     var negated: FieldSample { FieldSample(d: -d, g: -g) }
+
+    /// Поле, сдвинутое на s: s > 0 — тело тоньше на s, s < 0 — толще.
+    func offset(_ s: Double) -> FieldSample { FieldSample(d: d + s, g: g) }
 }
 
 /// Точка в координатах группы → расстояние со знаком, мм, и градиент. Снаружи значение
-/// не больше настоящего расстояния до поверхности: пустоты можно пропускать блоками.
+/// почти не больше настоящего расстояния до поверхности: пустоты можно пропускать блоками.
 typealias DistanceField = (Vec3) -> FieldSample
 
 nonisolated struct CompiledField {
@@ -48,10 +44,42 @@ nonisolated struct CompiledField {
     var bounds: AABB
     /// Сумма площадей примитивов, мм², — оценка числа ячеек сетки.
     var area: Double
-    /// Самая мелкая деталь, мм: радиусы стыков и скруглений, половина толщины примитивов.
+    /// Самая мелкая деталь, мм: размеры стыков и скруглений, величины операций,
+    /// половина толщины примитивов.
     var detail: Double
-    /// Самый большой радиус стыка, мм.
+    /// Самый большой размер стыка, мм.
     var largestBlend: Double
+}
+
+/// Как ребёнок вливается в то, что получилось из детей выше.
+nonisolated enum BlendOperation: Equatable {
+    case union
+    case subtract
+    case intersect
+    case push
+    case avoid
+    case emboss
+    case deboss
+    case shell
+
+    init(_ node: Node) {
+        switch node.effect {
+        case .push: self = .push
+        case .avoid: self = .avoid
+        case .emboss: self = .emboss
+        case .deboss: self = .deboss
+        case .shell: self = .shell
+        case nil:
+            switch node.mode {
+            case .solid: self = .union
+            case .hole: self = .subtract
+            case .mask: self = .intersect
+            }
+        }
+    }
+
+    /// Объект сам добавляет материал, даже если выше ничего нет.
+    var startsScene: Bool { self == .union || self == .push || self == .avoid }
 }
 
 nonisolated enum SDF {
@@ -68,84 +96,102 @@ nonisolated enum SDF {
     // MARK: Группа
 
     private static func group(_ node: Node, pose: Pose) -> CompiledField? {
-        var solids: [CompiledField] = []
-        var holes: [CompiledField] = []
-        var masks: [CompiledField] = []
-        for child in node.children where child.visible {
-            guard let compiled = compile(child, pose: pose * child.pose) else { continue }
-            switch child.mode {
-            case .solid: solids.append(compiled)
-            case .hole: holes.append(compiled)
-            case .mask: masks.append(compiled)
-            }
-        }
-        guard !solids.isEmpty else { return nil }
-
-        let r = max(node.blend?.radius ?? 0, 0)
+        let k = max(node.blend?.radius ?? 0, 0)
         let kind = node.blend?.kind ?? .fillet
+        let children = node.children.filter(\.visible)
         // Детей много — далёкие считаются по габаритам, а не целиком.
-        let bounded = solids.count + holes.count + masks.count > 2
+        let bounded = children.count > 2
 
-        var area = 0.0
-        var detail = r > 0 ? r : Double.infinity
-        var largest = r
-        for part in solids + holes + masks {
-            area += part.area
-            detail = min(detail, part.detail)
-            largest = max(largest, part.largestBlend)
+        var scene: CompiledField?
+        for child in children {
+            guard let part = compile(child, pose: pose * child.pose) else { continue }
+            let operation = BlendOperation(child)
+            let strength = child.effect == nil ? 0 : child.effectStrength
+            guard let current = scene else {
+                // Выше ничего нет: вычитать и пересекать не с чем.
+                if operation.startsScene { scene = part }
+                continue
+            }
+            scene = apply(operation, part, to: current, k: k, kind: kind, strength: strength, bounded: bounded)
         }
-
-        // Скруглённое объединение добавляет материал не дальше r от стыка.
-        var bounds = union(solids.map(\.bounds))
-        if solids.count > 1 { bounds = bounds.expanded(by: r) }
-        var field = combine(solids, r, kind, bounded: bounded)
-
-        // Отверстие, которое не достаёт до тел, ничего не меняет.
-        // Разность A − H = A ∩ ¬H = ¬(¬A ∪ H): стык считается тем же объединением.
-        let cutting = holes.filter { $0.bounds.intersects(bounds, margin: r) }
-        if !cutting.isEmpty {
-            let solid = field
-            let outside: DistanceField = { p in solid(p).negated }
-            let hole = combine(cutting, r, kind, bounded: bounded)
-            field = { p in blendUnion(outside, hole, r, kind, p).negated }
-        }
-
-        // Пересечение A ∩ M = ¬(¬A ∪ ¬M).
-        if !masks.isEmpty {
-            var maskBounds = union(masks.map(\.bounds))
-            if masks.count > 1 { maskBounds = maskBounds.expanded(by: r) }
-            bounds = bounds.intersection(maskBounds)
-            guard !bounds.isEmpty else { return nil }
-            let body = field
-            let mask = combine(masks, r, kind, bounded: bounded)
-            let outsideBody: DistanceField = { p in body(p).negated }
-            let outsideMask: DistanceField = { p in mask(p).negated }
-            field = { p in blendUnion(outsideBody, outsideMask, r, kind, p).negated }
-        }
-
-        return CompiledField(field: field, bounds: bounds, area: area, detail: detail, largestBlend: largest)
+        return scene
     }
 
-    private static func union(_ boxes: [AABB]) -> AABB {
-        var result = AABB.empty
-        for box in boxes { result.formUnion(box) }
-        return result
-    }
+    /// Ребёнок part вливается в сцену операцией: поле, габариты и оценки сетки.
+    private static func apply(_ operation: BlendOperation, _ part: CompiledField, to scene: CompiledField,
+                              k: Double, kind: BlendKind, strength r: Double, bounded: Bool) -> CompiledField? {
+        var result = scene
+        result.area += part.area
+        result.detail = min(scene.detail, part.detail)
+        if k > 0 { result.detail = min(result.detail, k) }
+        if r > 0 { result.detail = min(result.detail, r) }
+        result.largestBlend = max(scene.largestBlend, part.largestBlend, k)
 
-    /// Объединяет поля частей: (((a ∪ b) ∪ c) ∪ d).
-    private static func combine(_ parts: [CompiledField], _ r: Double, _ kind: BlendKind,
-                                bounded: Bool) -> DistanceField {
-        let fields = parts.map { bounded ? SDF.bounded($0, margin: 2 * r + 0.5) : $0.field }
-        var result = fields[0]
-        for next in fields.dropFirst() {
-            let previous = result
-            result = { p in blendUnion(previous, next, r, kind, p) }
+        // Операция влияет не дальше k + r от объекта: дальше хватает его габаритов.
+        let a = bounded ? SDF.bounded(part, margin: 2 * k + r + 0.5) : part.field
+        let b = scene.field
+        let reach = k + r
+
+        switch operation {
+        case .union:
+            result.bounds = scene.bounds.union(part.bounds).expanded(by: k)
+            result.field = { p in smoothMin(a(p), b(p), k, kind) }
+        case .subtract:
+            // Отверстие, которое не достаёт до тел, ничего не меняет.
+            guard part.bounds.intersects(scene.bounds, margin: k) else { return scene }
+            result.field = { p in smoothMax(a(p).negated, b(p), k, kind) }
+        case .intersect:
+            result.bounds = scene.bounds.intersection(part.bounds)
+            guard !result.bounds.isEmpty else { return nil }
+            result.field = { p in smoothMax(a(p), b(p), k, kind) }
+        case .push:
+            // Из сцены вырезан объект с запасом r, сам объект — в вырезе.
+            result.bounds = scene.bounds.union(part.bounds)
+            result.field = { p in
+                let sa = a(p)
+                let cut = smoothMax(sa.offset(-r).negated, b(p), k, kind)
+                return cut.d < sa.d ? cut : sa
+            }
+        case .avoid:
+            // Из объекта вырезана сцена с запасом r, сцена — как была.
+            result.bounds = scene.bounds.union(part.bounds)
+            result.field = { p in
+                let sb = b(p)
+                let cut = smoothMax(sb.offset(-r).negated, a(p), k, kind)
+                return cut.d < sb.d ? cut : sb
+            }
+        case .emboss:
+            // Сцена плюс часть объекта, что не дальше r над её поверхностью.
+            guard part.bounds.intersects(scene.bounds, margin: reach) else { return scene }
+            result.bounds = scene.bounds.expanded(by: reach)
+            result.field = { p in
+                let sb = b(p)
+                return smoothMin(sb, smoothMax(a(p), sb.offset(-r), k, kind), k, kind)
+            }
+        case .deboss:
+            // Сцена минус часть объекта, что не глубже r под её поверхностью.
+            guard part.bounds.intersects(scene.bounds, margin: k) else { return scene }
+            result.field = { p in
+                let sb = b(p)
+                let engraved = smoothMax(sb.offset(r).negated, a(p), k, kind)
+                return smoothMax(engraved.negated, sb, k, kind)
+            }
+        case .shell:
+            // Внутри объекта — стенка сцены толщиной r от её поверхности внутрь.
+            result.bounds = scene.bounds.intersection(part.bounds)
+            guard !result.bounds.isEmpty else { return nil }
+            let half = r / 2
+            result.field = { p in
+                let inner = b(p).offset(half)
+                let wall = FieldSample(d: abs(inner.d) - half, g: inner.d < 0 ? -inner.g : inner.g)
+                return smoothMax(a(p), wall, k, kind)
+            }
         }
         return result
     }
 
     /// Далеко от габаритов части поле — расстояние до габаритов: оно не больше
-    /// настоящего, положительно, а стыки дальше 2r на результат не влияют.
+    /// настоящего, положительно, а операции дальше margin на результат не влияют.
     private static func bounded(_ part: CompiledField, margin: Double) -> DistanceField {
         let field = part.field
         let lo = part.bounds.lo
@@ -161,95 +207,32 @@ nonisolated enum SDF {
         }
     }
 
-    // MARK: Операции
+    // MARK: Сглаживание
 
     static let rootHalf = 0.5.squareRoot()
     static let rootThird = (1.0 / 3).squareRoot()
-    /// Фаска влияет, пока оба расстояния меньше r / (2 − √2).
-    static let chamferReach = 1 / (2 - 2.0.squareRoot())
 
-    /// Объединение полей a и b в точке p. Скругление — дуга радиуса r во внутреннем углу,
-    /// фаска — 45° с катетом r. Пересечение и разность сводятся к нему через отрицание.
-    static func blendUnion(_ a: DistanceField, _ b: DistanceField, _ r: Double, _ kind: BlendKind,
-                           _ p: Vec3) -> FieldSample {
-        let sa = a(p)
-        let sb = b(p)
-        let m = sa.d < sb.d ? sa : sb
-        guard r > 0 else { return m }
-        let reach = kind == .fillet ? r : r * chamferReach
-        guard sa.d < reach, sb.d < reach else { return m }
-
-        let re = r * joint(a, sa, b, sb, p, r)
-        guard re > 1e-9 else { return m }
-
+    /// Объединение со стыком размера k. Скругление — гладкий минимум: стык начинается
+    /// там, где расстояния до тел различаются меньше чем на k, и в прямом углу
+    /// уходит от ребра на k вдоль каждой грани. Фаска — плоскость a + b = k.
+    static func smoothMin(_ a: FieldSample, _ b: FieldSample, _ k: Double, _ kind: BlendKind) -> FieldSample {
+        let m = a.d < b.d ? a : b
+        guard k > 0 else { return m }
         switch kind {
         case .fillet:
-            guard m.d < re else { return m }
-            let ua = max(re - sa.d, 0)
-            let ub = max(re - sb.d, 0)
-            let length = (ua * ua + ub * ub).squareRoot()
-            guard length > 1e-12 else { return m }
-            return FieldSample(d: re - length, g: (sa.g * ua + sb.g * ub) / length)
+            let h = min(max(0.5 + 0.5 * (b.d - a.d) / k, 0), 1)
+            guard h > 0, h < 1 else { return m }
+            // Производная по h равна нулю, поэтому градиент — просто смесь градиентов.
+            return FieldSample(d: b.d + (a.d - b.d) * h - k * h * (1 - h), g: b.g + (a.g - b.g) * h)
         case .chamfer:
-            let d = (sa.d + sb.d - re) * rootHalf
-            return d < m.d ? FieldSample(d: d, g: (sa.g + sb.g) * rootHalf) : m
+            let d = (a.d + b.d - k) * rootHalf
+            return d < m.d ? FieldSample(d: d, g: (a.g + b.g) * rootHalf) : m
         }
     }
 
-    /// Какая доля радиуса достаётся стыку рядом с точкой p: 1 — стык есть, 0 — стыка нет
-    /// (грани заподлицо, зазор, внутренняя грань тел внахлёст).
-    ///
-    /// Множитель равен 1 для любого обычного угла между гранями и уходит в 0 только
-    /// в этих трёх случаях. Промежуточные значения дали бы скачки там, где у тела
-    /// сменяется ближайшая грань (на его рёбрах), — и зубцы в сетке.
-    ///
-    /// Проверки идут в центре шара: из p отходим от каждого тела до расстояния r.
-    /// В прямом углу это одна точка для всей полосы скругления.
-    static func joint(_ a: DistanceField, _ sa: FieldSample, _ b: DistanceField, _ sb: FieldSample,
-                      _ p: Vec3, _ r: Double) -> Double {
-        // Градиент вырожден там, где поле — лишь оценка (середина тел внахлёст).
-        guard let na = unit(sa.g), let nb = unit(sb.g) else { return 0 }
-        // Грани лицом к лицу через узкий зазор. Только почти точно параллельные:
-        // более широкий порог задевает острые углы (ребро под наклоном к основанию)
-        // и рвёт поле на их стыке с соседними скруглениями.
-        var factor = ramp(-na.dot(nb), from: 0.995, to: 0.97)
-        guard factor > 0 else { return 0 }
-
-        let center = p + na * (r - sa.d) + nb * (r - sb.d)
-        let ca = a(center)
-        let cb = b(center)
-        // Центр попал внутрь тела — шар здесь не катится, проверять нечего.
-        guard ca.d > 0, cb.d > 0, let ua = unit(ca.g), let ub = unit(cb.g) else { return factor }
-
-        // Основания перпендикуляров из центра должны лежать на настоящей поверхности.
-        let footA = center - ua * ca.d
-        let footB = center - ub * cb.d
-        let miss = max(abs(a(footA).d) / ca.d, abs(b(footB).d) / cb.d)
-        factor *= ramp(miss, from: 0.75, to: 0.25)
-        guard factor > 0 else { return 0 }
-
-        // Открытость: основание на одном теле так же далеко от другого, как центр.
-        // У граней заподлицо отношение около 0, у зазора — около 2. Смысл оно имеет,
-        // только когда шар помещается: иначе делим на малое расстояние.
-        let fit = ramp(min(ca.d, cb.d) / r, from: 0.2, to: 0.8)
-        if fit > 0 {
-            let ratioA = max(b(footA).d, 0) / cb.d
-            let ratioB = max(a(footB).d, 0) / ca.d
-            let open = min(min(ramp(ratioA, from: 0.05, to: 0.5), ramp(ratioA, from: 1.95, to: 1.5)),
-                           min(ramp(ratioB, from: 0.05, to: 0.5), ramp(ratioB, from: 1.95, to: 1.5)))
-            factor *= 1 - fit * (1 - open)
-        }
-        return factor
-    }
-
-    private static func unit(_ v: Vec3) -> Vec3? {
-        let length = v.length
-        return length > 1e-12 ? v / length : nil
-    }
-
-    /// 0 при значении `from` и дальше от `to`, 1 при `to` и дальше от `from`, линейно между.
-    private static func ramp(_ value: Double, from zero: Double, to one: Double) -> Double {
-        min(max((value - zero) / (one - zero), 0), 1)
+    /// Пересечение со стыком размера k: max(a, b) = −min(−a, −b).
+    static func smoothMax(_ a: FieldSample, _ b: FieldSample, _ k: Double, _ kind: BlendKind) -> FieldSample {
+        smoothMin(a.negated, b.negated, k, kind).negated
     }
 
     // MARK: Примитивы

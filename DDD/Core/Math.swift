@@ -196,6 +196,12 @@ nonisolated struct AABB: Sendable, Equatable {
         return result
     }
 
+    func union(_ other: AABB) -> AABB {
+        var result = self
+        result.formUnion(other)
+        return result
+    }
+
     func expanded(by margin: Double) -> AABB {
         guard !isEmpty else { return self }
         let m = Vec3(margin, margin, margin)

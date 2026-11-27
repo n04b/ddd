@@ -94,8 +94,12 @@ private struct NodeInspector: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            ModeSwitch(mode: node.mode) { mode in
-                model.setMode([node.id], mode)
+            if let parent = model.parentGroup(of: node.id) {
+                operationSection(in: parent)
+            } else {
+                ModeSwitch(mode: node.mode) { mode in
+                    model.setMode([node.id], mode)
+                }
             }
 
             if node.mode == .hole && model.isTopLevel(node.id) {
@@ -264,11 +268,42 @@ private struct NodeInspector: View {
         }
     }
 
+    /// Операция объекта в группе: тело, отверстие, маска и операции SDF Modeler с величиной.
+    @ViewBuilder
+    private func operationSection(in parent: Node) -> some View {
+        let id = node.id
+        VStack(alignment: .leading, spacing: 8) {
+            OperationPicker(mode: node.mode, effect: node.effect,
+                            onMode: { model.setMode([id], $0) },
+                            onEffect: { model.setEffect([id], $0) })
+            if let effect = node.effect {
+                NumberField(label: effect.strengthLabel, labelColor: Theme.secondary, labelWidth: 46,
+                            value: node.effectStrength, unit: "mm", dragStep: 0.05, keyStep: 0.5,
+                            minimum: 0.05,
+                            onChange: { model.setStrength(id, $0) },
+                            onFinish: { model.breakCoalescing() })
+            }
+            if parent.isBlended {
+                Text(((node.effect?.help).map { $0 + " " } ?? "")
+                     + "In an SDF group objects apply top to bottom: this one acts on the objects above it.")
+            }
+        }
+        .font(Theme.label(10.5))
+        .foregroundStyle(Theme.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     /// Стыки группы: острые (BSP) или скругление и фаска на каждом стыке через поле расстояний.
     private var joinsSection: some View {
         let id = node.id
         return section("JOINS") {
             JoinSwitch(kind: node.blend?.kind) { model.setBlendKind(id, $0) }
+            if node.blend == nil && node.isBlended {
+                Text("Some objects use Push, Avoid, Emboss, Deboss or Shell, so the group is built from a distance field with sharp joins.")
+                    .font(Theme.label(10.5))
+                    .foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let blend = node.blend {
                 NumberField(label: blend.kind == .fillet ? "R" : "◢", labelColor: Theme.secondary,
                             value: blend.radius, unit: "mm", dragStep: 0.1, keyStep: 0.5,
@@ -457,6 +492,82 @@ struct ModeSwitch: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Операция объекта в группе, как в SDF Modeler: тело (Union), отверстие (Subtract),
+/// маска (Intersect) и пять операций с величиной. Две строки по четыре.
+struct OperationPicker: View {
+    let mode: NodeMode
+    let effect: BlendEffect?
+    let onMode: (NodeMode) -> Void
+    let onEffect: (BlendEffect) -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                modeSegment("Solid", .solid, Theme.emerald, "Union: merged with the objects above")
+                modeSegment("Hole", .hole, Theme.orange, "Subtract: cut out of the objects above")
+                modeSegment("Mask", .mask, Theme.violet, "Intersect: only what is inside it remains of the objects above")
+                effectSegment(.push)
+            }
+            HStack(spacing: 2) {
+                effectSegment(.avoid)
+                effectSegment(.emboss)
+                effectSegment(.deboss)
+                effectSegment(.shell)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.field))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 1))
+    }
+
+    private func modeSegment(_ title: String, _ value: NodeMode, _ color: Color, _ help: String) -> some View {
+        segment(title, active: effect == nil && mode == value, color: color, help: help) { onMode(value) }
+    }
+
+    private func effectSegment(_ value: BlendEffect) -> some View {
+        segment(value.title, active: effect == value, color: Theme.cyan, help: value.help) { onEffect(value) }
+    }
+
+    private func segment(_ title: String, active: Bool, color: Color, help: String,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.label(11, .medium))
+                .foregroundStyle(active ? color : Theme.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+                .background(Capsule().fill(active ? color.opacity(0.16) : Color.clear))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+extension BlendEffect {
+    /// Подпись поля величины.
+    var strengthLabel: String {
+        switch self {
+        case .push, .avoid: return "Gap"
+        case .emboss: return "Height"
+        case .deboss: return "Depth"
+        case .shell: return "Wall"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .push: return "Push: inserted with a gap — the objects above move away from it."
+        case .avoid: return "Avoid: keeps a gap from the objects above, which stay as they are."
+        case .emboss: return "Emboss: raises the surface of the objects above where it covers them."
+        case .deboss: return "Deboss: engraves the surface of the objects above where it covers them."
+        case .shell: return "Shell: inside it the objects above become a hollow wall; outside it nothing remains."
+        }
     }
 }
 
